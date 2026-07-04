@@ -1,0 +1,19 @@
+[project]
+name = "nse-text-screener"
+version = "0.2.0"
+description = "Plain-English technical stock screener for the Nifty 500"
+requires-python = ">=3.10"
+dependencies = [
+  "pandas>=2.0",
+  "numpy>=1.24",
+  "pyarrow>=14.0",
+  "requests>=2.31",
+  "yfinance>=0.2.40",
+  "anthropic>=0.34",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

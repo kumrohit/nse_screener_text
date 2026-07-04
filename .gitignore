@@ -1,0 +1,20 @@
+# data stores (regenerate via backfill — never commit market data)
+data/*.parquet
+!data/.gitkeep
+data/*.csv
+
+# python
+__pycache__/
+*.pyc
+.pytest_cache/
+*.egg-info/
+build/
+dist/
+.venv/
+
+# env / secrets
+.env
+
+# editor
+.vscode/
+.idea/
