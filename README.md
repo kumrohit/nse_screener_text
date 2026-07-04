@@ -45,7 +45,22 @@ Keep it fresh with a nightly job (after 18:30 IST, once NSE close data settles):
 python -m screener.cli update
 ```
 
-## Usage
+## Web UI
+
+```bash
+python -m screener.webapp        # http://127.0.0.1:8501
+```
+
+Type a screen in plain English, hit **Interpret query** to see exactly how it
+was understood (plain English + the compiled JSON spec), then **Run screen**.
+Every match expands into an **evidence trail**: each condition with a ✓/✗ and
+the observed values behind it — which bar touched the EMA and how close, the
+actual RSI, the cross date, the stock-vs-Nifty return gap. A **near-misses**
+section shows stocks that failed exactly one condition, so you can see the
+boundary of your filter. With no price store yet, it boots into a labelled
+8-stock demo universe; preset chips run without an API key.
+
+## CLI usage
 
 ```bash
 # plain English

@@ -1,6 +1,6 @@
 # NSE Text Screener — Technical Design Document
 
-Version 0.2 · July 2026 · Status: Phase 2 complete, tested on synthetic data, pending first live run
+Version 0.3 · July 2026 · Status: Phase 2 + web UI complete, tested on synthetic data, pending first live run
 
 ---
 
@@ -117,11 +117,21 @@ Three layers. **Synthetic-series unit tests** (27 passing): constructed price pa
 
 First run: `pip install -r requirements.txt`, set `ANTHROPIC_API_KEY`, `python -m screener.cli backfill` (10–15 min). Nightly: cron `python -m screener.cli update` after 18:30 IST. Quarterly: refresh the universe and re-backfill to pick up rebalances. Screens: `screen "<text>"`, `--dry-run` to inspect the compiled spec, `--json` to bypass the LLM, `--out file.csv` to export. Failure modes: stale-store error → run update; universe fetch fails → cached list used automatically, manual CSV drop-in as last resort; yfinance thin/missing data for a symbol → excluded by the 60-bar minimum, check the alias problem in §4; parser refusal → the query needs rephrasing within scope, or the concept belongs on the roadmap.
 
-## 12. Roadmap
+
+## 12. Web UI and evidence layer
+
+`python -m screener.webapp` serves a single-page interface (FastAPI backend, dependency-free vanilla-JS frontend in `web/index.html`, port 8501) built around full auditability of every screen. The page always shows, together: the original query, the plain-English compiled interpretation, the raw JSON spec (collapsible), the data as-of date and mode, and funnel statistics (universe → liquidity-excluded → evaluated → matched).
+
+The core of the UI is the **evidence trail**, powered by `explain.py`. For every condition on every displayed stock it reports pass/fail plus the observed values behind the decision — e.g. for `support_at_ma`: the date the low touched the MA and the touch distance, the worst close-vs-MA excursion across the window, and the latest close's margin above the MA. Pass/fail is delegated to the same `evaluator.cond_*` functions used by the screen itself, so the explanation can never disagree with the result; `explain.py` only adds observability. A **near-miss** section lists stocks failing exactly one condition with the failing condition marked ✗ — the most useful feedback for tuning tolerances.
+
+Endpoints: `GET /api/status`, `POST /api/parse` (text → spec via the LLM; returns a structured error without an API key), `POST /api/screen` (spec → matches + near-misses + methodology block). Specs can bypass the parser entirely via the JSON tab. When `data/prices.parquet` is absent the backend boots a labelled synthetic 8-stock demo universe (`demo.py`) with engineered behaviours (EMA pullback, breakdown, range-bound at support, resistance breakout, oversold, golden cross), so the UI, API, and evidence layer are fully testable — in CI and by a fresh clone — without market data.
+
+## 13. Roadmap
 
 Phase 3 (next): screen backtesting — for any DSL spec, compute historical hit dates per symbol and forward return distributions (5/20/60 bars) vs universe baseline, turning the screener into an edge-validation tool; reuse the existing as-of machinery (already built for this) and the Indian transaction-cost model from the momentum backtester. Then: candlestick and consolidation patterns (inside bars, NR7, flat bases) as DSL conditions; sector/industry relative strength using the universe's industry column; nested boolean logic if real queries demand it; delivery-percentage data (requires the bhavcopy migration — yfinance doesn't carry it); optional React front-end reusing the terminal-style screener UI.
 
-## 13. Changelog
+## 14. Changelog
 
 0.1 — Data layer (Nifty 500, yfinance 5y, Parquet), daily indicator engine, 8-condition DSL with validation and English echo, LLM parser with canonical vocabulary, CLI, 16 synthetic tests.
+0.3 — Web UI: FastAPI backend + single-page evidence-trail frontend, explain.py observability layer, near-miss reporting, synthetic demo mode, 33 tests.
 0.2 — Swing-pivot S/R (`near_support`, `near_resistance`, `breakout_resistance`), weekly timeframe on 5 condition types, `rel_strength` vs Nifty with benchmark ingestion, golden-query suite (12 fixtures, offline + live harness), 27 tests total, this document.
