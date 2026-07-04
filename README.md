@@ -16,6 +16,8 @@ symbol   close  pct_vs_ema50   rsi  vol_ratio  ret_1m_pct  ret_3m_pct  ...
 
 You describe the setup the way you'd say it to another trader; the tool compiles it into a strict, deterministic filter, echoes its interpretation back so you can verify it understood you, and screens five years of daily NSE data. Price and volume technicals only — it will refuse fundamentals rather than guess.
 
+Use it from the **web UI** (recommended — every match comes with a per-condition evidence trail showing the exact values behind the decision) or the CLI shown above.
+
 ## How it works
 
 ```
@@ -39,13 +41,31 @@ export ANTHROPIC_API_KEY=sk-ant-...        # only needed for plain-English queri
 python -m screener.cli backfill            # one-time: Nifty 500 list + 5y history (~10-15 min)
 ```
 
+No data yet? `python -m screener.webapp` works immediately — it boots into a
+labelled 8-stock demo universe so you can explore the interface first.
+
 Keep it fresh with a nightly job (after 18:30 IST, once NSE close data settles):
 
 ```bash
 python -m screener.cli update
 ```
 
-## Usage
+## Web UI
+
+```bash
+python -m screener.webapp        # http://127.0.0.1:8501
+```
+
+Type a screen in plain English, hit **Interpret query** to see exactly how it
+was understood (plain English + the compiled JSON spec), then **Run screen**.
+Every match expands into an **evidence trail**: each condition with a ✓/✗ and
+the observed values behind it — which bar touched the EMA and how close, the
+actual RSI, the cross date, the stock-vs-Nifty return gap. A **near-misses**
+section shows stocks that failed exactly one condition, so you can see the
+boundary of your filter. With no price store yet, it boots into a labelled
+8-stock demo universe; preset chips run without an API key.
+
+## CLI usage
 
 ```bash
 # plain English
@@ -92,7 +112,8 @@ Nifty 500 constituents from NSE's official index CSV; daily OHLCV from Yahoo Fin
 ## Tests
 
 ```bash
-python -m pytest tests/                    # 27 tests on synthetic series with known answers
+python -m pytest tests/                    # 33 tests: synthetic series with known answers,
+                                           # evidence-layer agreement, web API contract
 python -m tests.golden_harness             # live parser scoring vs 12 hand-verified queries
 ```
 

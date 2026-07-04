@@ -171,9 +171,22 @@ def _fmt_field(f: Any) -> str:
         "_", " ")
 
 
+def describe_condition(c: dict) -> str:
+    """Plain-English rendering of a single condition."""
+    parts: list[str] = []
+    _append_condition(parts, c)
+    return parts[0] if parts else str(c)
+
+
 def describe(screen: dict) -> str:
-    parts = []
+    parts: list[str] = []
     for c in screen["conditions"]:
+        _append_condition(parts, c)
+    joiner = " AND " if screen.get("logic", "AND") == "AND" else " OR "
+    return "Screening for: " + joiner.join(parts)
+
+
+def _append_condition(parts: list, c: dict) -> None:
         t = c["type"]
         if t == "compare":
             parts.append(f"{_fmt_field(c['left'])} {c['op']} "
@@ -230,5 +243,3 @@ def describe(screen: dict) -> str:
                 f"{c['value_pct']}%")
         if c.get("timeframe") == "weekly" and parts:
             parts[-1] += " [weekly]"
-    joiner = " AND " if screen.get("logic", "AND") == "AND" else " OR "
-    return "Screening for: " + joiner.join(parts)

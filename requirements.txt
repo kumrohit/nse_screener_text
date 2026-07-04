@@ -4,4 +4,6 @@ pyarrow>=14.0
 requests>=2.31
 yfinance>=0.2.40
 anthropic>=0.34
+fastapi>=0.110
+uvicorn>=0.29
 pytest>=8.0

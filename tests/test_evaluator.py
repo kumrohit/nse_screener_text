@@ -284,3 +284,73 @@ class TestGoldenOffline:
             spec = dsl.validate(case["expected"])
             assert dsl.describe(spec)
             canon(spec)  # canonicalisation must not raise
+
+
+# ---------------------------------------------------------------- web/explain
+from fastapi.testclient import TestClient  # noqa: E402
+from screener.webapp import app  # noqa: E402
+from screener import explain  # noqa: E402
+
+
+class TestExplain:
+    def test_evidence_agrees_with_evaluator(self):
+        p = uptrend_pullback_panel()
+        ev = explain.explain_symbol(p, dsl.validate(SUPPORT_UPTREND))
+        assert len(ev) == 2 and all(e["passed"] for e in ev)
+        assert "EMA" in ev[0]["evidence"] or "ema" in ev[0]["evidence"]
+        # breakdown: same conditions, both must be marked failed
+        ev2 = explain.explain_symbol(breakdown_panel(),
+                                     dsl.validate(SUPPORT_UPTREND))
+        assert not any(e["passed"] for e in ev2)
+
+    def test_weekly_and_rel_strength_evidence(self):
+        p = _mk_ohlcv(100 * np.cumprod(1 + np.full(600, 0.002)))
+        bench = pd.Series(100 * np.cumprod(1 + np.full(600, 0.0005)),
+                          index=p.index)
+        spec = dsl.validate({"conditions": [
+            {"type": "trend", "direction": "up", "timeframe": "weekly"},
+            {"type": "rel_strength", "window": 63, "op": ">",
+             "value_pct": 0}]})
+        ev = explain.explain_symbol(p, spec, benchmark=bench)
+        assert ev[0]["evidence"].startswith("[weekly]")
+        assert ev[0]["passed"] and ev[1]["passed"]
+        assert "pct pts" in ev[1]["evidence"]
+
+
+class TestWebAPI:
+    client = TestClient(app)
+
+    def test_status_demo_mode(self):
+        r = self.client.get("/api/status")
+        assert r.status_code == 200
+        assert r.json()["mode"] == "demo"  # no price store in CI
+
+    def test_screen_endpoint_full_payload(self):
+        r = self.client.post("/api/screen", json={"spec": SUPPORT_UPTREND})
+        assert r.status_code == 200
+        j = r.json()
+        syms = [m["symbol"] for m in j["matches"]]
+        assert "PULLBK" in syms and "BRKDWN" not in syms
+        m = next(m for m in j["matches"] if m["symbol"] == "PULLBK")
+        assert m["conditions_passed"] == m["conditions_total"] == 2
+        assert all(e["passed"] and e["evidence"] for e in m["evidence"])
+        assert j["english"].startswith("Screening for")
+        assert j["stats"]["universe"] == 8
+        assert "methodology" in j
+
+    def test_screen_rejects_bad_spec(self):
+        r = self.client.post("/api/screen", json={"spec": {
+            "conditions": [{"type": "compare", "left": "pe_ratio",
+                            "op": ">", "right": 5}]}})
+        assert r.status_code == 422 and "pe_ratio" in r.json()["error"]
+
+    def test_near_misses_reported(self):
+        # oversold AND uptrend is contradictory in demo set -> near misses
+        spec = {"logic": "AND", "conditions": [
+            {"type": "range", "field": "rsi", "max": 30},
+            {"type": "trend", "direction": "up"}]}
+        j = self.client.post("/api/screen", json={"spec": spec}).json()
+        assert j["stats"]["matched"] == 0
+        assert j["stats"]["near_misses"] >= 1
+        nm = j["near_misses"][0]
+        assert nm["conditions_passed"] == 1
