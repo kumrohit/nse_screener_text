@@ -817,3 +817,18 @@ class TestSectorConditions:
         assert "Sector A" in ev[0]["evidence"]
         assert "percentile" in ev[1]["evidence"]
         assert "ranked" in ev[2]["evidence"]
+
+
+class TestCrossSectionCache:
+    def test_cache_bounded(self):
+        from screener import cross_section as cs
+        from screener.webapp import _load_state
+        st = _load_state()
+        cs._CACHE.clear()
+        panel = next(iter(st["panels"].values()))
+        dates = [str(d.date()) for d in panel.index[-(cs._CACHE_MAX + 10):]]
+        for d in dates:
+            cs.build_cross_section(st["panels"], st["universe"], d, 63)
+        assert len(cs._CACHE) <= cs._CACHE_MAX
+        # most recent as_of must still be cached (FIFO evicts oldest)
+        assert any(k[1] == dates[-1] for k in cs._CACHE)

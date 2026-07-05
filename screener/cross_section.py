@@ -15,7 +15,14 @@ import pandas as pd
 
 from .evaluator import _row_at
 
+# Bounded FIFO cache: replaying many as-of dates in a long-running webapp
+# must not grow memory forever, and a bounded cache also limits the blast
+# radius of the id(panels) key if a future data-reload feature ever rebuilds
+# the panels dict (a GC-reused id could otherwise serve stale ranks
+# indefinitely). 32 entries ≈ 32 replayed dates, far more than a session
+# uses; eviction is oldest-first.
 _CACHE: dict[tuple, pd.DataFrame] = {}
+_CACHE_MAX = 32
 
 
 def build_cross_section(panels: dict[str, pd.DataFrame],
@@ -67,5 +74,7 @@ def build_cross_section(panels: dict[str, pd.DataFrame],
     df["ret_pct"] = df["ret_pct"].round(2)
 
     df = df.set_index("symbol")
+    if len(_CACHE) >= _CACHE_MAX:
+        _CACHE.pop(next(iter(_CACHE)))  # FIFO evict oldest
     _CACHE[key] = df
     return df
