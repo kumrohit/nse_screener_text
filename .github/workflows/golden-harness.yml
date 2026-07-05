@@ -1,0 +1,21 @@
+name: golden harness (live)
+on:
+  workflow_dispatch:
+# Manual only — this hits the real Anthropic API and needs an
+# ANTHROPIC_API_KEY repo secret. Gate any parser-prompt change on this
+# passing N/N before merging (see tests/golden_harness.py and
+# TECHNICAL_DESIGN.md §10); the offline suite in ci.yml already
+# validates every fixture's shape on every push, but only this job
+# actually scores the live parser.
+jobs:
+  golden-harness:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+      - run: python -m tests.golden_harness
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}

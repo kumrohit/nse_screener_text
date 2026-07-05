@@ -6,12 +6,14 @@ Endpoints
 ---------
 GET  /             the single-page UI
 GET  /api/status   data mode (live/demo), as-of date, universe size
+GET  /api/health   cheap cron/uptime probe: store mtime + as-of, panel
+                   count, benchmark presence, log writability, git version
 POST /api/parse    {"query": str} -> {"spec", "english"} | 422 {"error"}
 POST /api/screen   {"spec": dict} -> stats + matches with per-condition
                    evidence (and near-misses: stocks failing exactly one
                    condition, so the user sees the boundary of the filter)
 
-Falls back to a synthetic 8-stock demo universe when no price store exists,
+Falls back to a synthetic 11-stock demo universe when no price store exists,
 so the UI is explorable immediately after clone.
 """
 from __future__ import annotations
@@ -30,6 +32,7 @@ if sys.version_info < (3, 10):  # must run before any third-party import
         "    pip install -r requirements.txt"
     )
 
+import os as _os
 import threading
 
 import pandas as pd
@@ -45,12 +48,27 @@ _state: dict = {}
 _lock = threading.Lock()
 
 
+def _store_mtime() -> float | None:
+    """mtime of the file a long-running server must watch for changes.
+    None in demo mode (nothing on disk to watch) — kept distinct from
+    any real mtime so a demo->live transition is also detected."""
+    return (config.PRICE_STORE.stat().st_mtime
+           if config.PRICE_STORE.exists() else None)
+
+
 def _load_state() -> dict:
+    """Cached, but self-invalidating: a long-running server used to load
+    panels once at startup and never notice `python -m screener.cli
+    update` writing a fresh prices.parquet overnight, silently screening
+    yesterday's data forever. Now every call compares the store's mtime
+    against what was loaded and rebuilds on any change."""
     with _lock:
-        if _state:
+        mtime = _store_mtime()
+        if _state and _state.get("_mtime") == mtime:
             return _state
+        _state.clear()
         if config.PRICE_STORE.exists():
-            from . import data_ingest, universe as uni_mod
+            from . import cross_section, data_ingest, universe as uni_mod
             prices = pd.read_parquet(config.PRICE_STORE)
             latest = data_ingest.assert_fresh(prices)
             _state.update(
@@ -59,13 +77,18 @@ def _load_state() -> dict:
                 universe=uni_mod.fetch_universe(),
                 benchmark=data_ingest.load_benchmark(),
                 as_of=str(latest.date()),
+                _mtime=mtime,
             )
+            cross_section._CACHE.clear()  # keyed by id(panels) — a GC-reused
+                                          # id could otherwise serve stale
+                                          # ranks after a rebuild
         else:
             from . import demo
             panels, uni, bench = demo.build_demo()
             _state.update(mode="demo", panels=panels, universe=uni,
                           benchmark=bench,
-                          as_of=str(panels["STEADY"].index[-1].date()))
+                          as_of=str(panels["STEADY"].index[-1].date()),
+                          _mtime=None)
         return _state
 
 
@@ -90,6 +113,38 @@ def status():
             "history_years": config.HISTORY_YEARS}
 
 
+def _git_version() -> str:
+    import subprocess
+    try:
+        out = subprocess.run(
+            ["git", "describe", "--always", "--dirty"],
+            cwd=config.ROOT, capture_output=True, text=True, timeout=5)
+        return out.stdout.strip() or "unknown"
+    except Exception:  # noqa: BLE001 — a health probe must never raise
+        return "unknown"
+
+
+@app.get("/api/health")
+def health():
+    """Cheap JSON for cron/uptime monitoring — the nightly pipeline
+    curls this after `update` to confirm the server actually picked up
+    the fresh store (the P0 stale-server fix, verified live)."""
+    st = _load_state()
+    mtime = st.get("_mtime")
+    return {
+        "mode": st["mode"],
+        "as_of": st["as_of"],
+        "store_mtime": (pd.Timestamp(mtime, unit="s").isoformat()
+                        if mtime else None),
+        "panel_count": len(st["panels"]),
+        "benchmark_present": st["benchmark"] is not None,
+        "log_writable": _os.access(config.DATA_DIR, _os.W_OK)
+                       if config.DATA_DIR.exists() else False,
+        "version": _git_version(),
+        "config_hash": config.config_hash(),
+    }
+
+
 @app.get("/api/presets")
 def presets_list():
     from . import presets
@@ -103,7 +158,7 @@ def presets_list():
 def parse(body: ParseIn):
     from . import parser
     try:
-        spec = parser.parse(body.query)
+        spec, assumptions = parser.parse_with_assumptions(body.query)
     except dsl.DSLValidationError as exc:
         return JSONResponse({"error": str(exc)}, status_code=422)
     except KeyError:
@@ -111,7 +166,8 @@ def parse(body: ParseIn):
             {"error": "ANTHROPIC_API_KEY not set — plain-English parsing "
                       "is unavailable. Use the JSON spec tab instead."},
             status_code=422)
-    return {"spec": spec, "english": dsl.describe(spec)}
+    return {"spec": spec, "english": dsl.describe(spec),
+            "assumptions": assumptions}
 
 
 @app.post("/api/screen")
@@ -179,6 +235,7 @@ def screen(body: ScreenIn):
                            if len(meta) and pd.notna(meta["industry"].iloc[0])
                            else "—")
         row["spark"] = _spark(panel, spec, evidence, i)
+        row["flags"] = _data_quality_flags(panel, i, st["as_of"])
         (matches if matched else near_misses).append(row)
 
     matches.sort(key=lambda r: (r["metrics"]["ret_3m_pct"] is None,
@@ -208,6 +265,7 @@ def screen(body: ScreenIn):
                               f"₹{config.MIN_MEDIAN_TURNOVER_CR} cr",
             "nan_policy": "any missing input ⇒ condition fails "
                           "(insufficient history never matches)",
+            "config_hash": config.config_hash(),
         },
     }
 
@@ -220,11 +278,13 @@ _PLOTTABLE = {"ema_10", "ema_20", "ema_50", "ema_100", "ema_200",
               "sma_20", "sma_50", "sma_200", "bb_upper", "bb_lower",
               "high_52w", "low_52w"}
 _LEVEL_KEYS = ("support", "resistance", "level")
-SPARK_BARS = 60
+# Overridable via data/config_local.toml (ROADMAP Item 6) — aliased here
+# since they're referenced throughout this module.
+SPARK_BARS = config.SPARK_BARS
 # Cap how many match cards the payload carries — stats.matched still
 # reports the true total, so a loose filter's size is never hidden,
 # just not rendered as hundreds of DOM cards.
-MAX_MATCHES = 100
+MAX_MATCHES = config.MAX_MATCHES
 
 
 def _spark(panel: pd.DataFrame, spec: dict, evidence: list[dict],
@@ -257,7 +317,59 @@ def _spark(panel: pd.DataFrame, spec: dict, evidence: list[dict],
     }
 
 
+MIN_RELIABLE_BARS = 250  # below this, long-lookback indicators (EMA200,
+                        # 52-week high/low) are built on insufficient history
+
+
+def _data_quality_flags(panel: pd.DataFrame, i: int, store_as_of: str
+                        ) -> list[dict]:
+    """Per-symbol data-quality flags surfaced directly on match cards —
+    the same signals `verify`'s adjustment smell test and coverage
+    checks look for, but scoped to one symbol and shown where a user is
+    actually looking, not buried in a separate CLI report."""
+    flags = []
+    win = panel.iloc[max(0, i - SPARK_BARS + 1): i + 1]
+    jumps = win["close"].pct_change().abs()
+    if (jumps > 0.40).any():
+        d = jumps.idxmax()
+        flags.append({"code": "jump", "reason":
+                     f"single-day move >40% on {d.date()} within the "
+                     "chart window — possible unadjusted split/demerger; "
+                     "levels may straddle a gap"})
+    if i + 1 < MIN_RELIABLE_BARS:
+        flags.append({"code": "thin_history", "reason":
+                     f"only {i + 1} bars of history as of this date — "
+                     "long-lookback indicators (EMA200, 52-week high/low) "
+                     "may be unreliable"})
+    last_bar = panel.index[-1]
+    if store_as_of and last_bar < pd.Timestamp(store_as_of):
+        flags.append({"code": "stale", "reason":
+                     f"last available bar is {last_bar.date()}, before "
+                     f"the store's latest ({store_as_of}) — possibly "
+                     "suspended or delisted"})
+    return flags
+
+
 LOG_FILE = config.DATA_DIR / "screen_log.jsonl"
+ROTATED_LOG_FILE = config.DATA_DIR / "screen_log.rotated.jsonl"
+MAX_LOG_LINES = 5000
+
+
+def _rotate_log_if_needed() -> None:
+    """Size-capped rotation: once the active log exceeds MAX_LOG_LINES,
+    the oldest entries move into the rotated archive so a long-running
+    server's log can't grow forever, without discarding history
+    outright — `verify` checks both files."""
+    if not LOG_FILE.exists():
+        return
+    lines = LOG_FILE.read_text().splitlines()
+    if len(lines) <= MAX_LOG_LINES:
+        return
+    overflow = len(lines) - MAX_LOG_LINES
+    old, keep = lines[:overflow], lines[overflow:]
+    with open(ROTATED_LOG_FILE, "a") as fh:
+        fh.write("\n".join(old) + "\n")
+    LOG_FILE.write_text("\n".join(keep) + "\n")
 
 
 def _log_run(spec: dict, as_of: str, stats: dict, matches: list) -> None:
@@ -270,9 +382,10 @@ def _log_run(spec: dict, as_of: str, stats: dict, matches: list) -> None:
             fh.write(_json.dumps({
                 "ts": _dt.datetime.now().isoformat(timespec="seconds"),
                 "as_of": as_of, "spec": spec, "english": dsl.describe(spec),
-                "stats": stats,
+                "stats": stats, "config_hash": config.config_hash(),
                 "matched": [m["symbol"] for m in matches],
             }) + "\n")
+        _rotate_log_if_needed()
     except OSError:
         pass  # logging must never break a screen
 

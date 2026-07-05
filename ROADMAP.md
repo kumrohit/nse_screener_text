@@ -5,16 +5,19 @@ commits that complete them; anything descoped gets struck through with a
 one-line reason, not silently deleted. Design rationale lives in
 TECHNICAL_DESIGN.md; this file is the *what and in which order*.
 
-Status snapshot: v0.6.3 — data layer live-verified (500/500),
+Status snapshot: v0.7.0 — data layer live-verified (500/500),
 20-condition DSL (incl. sector filters & cross-sectional relative
 strength, gap), patterns, 19 presets, web UI with evidence trails,
 sparklines, as-of replay, screen log, CSV export, recent-screens
-replay. NSE bhavcopy data layer v2 built and validated, running
-side-by-side (2-week evidence clock started 2026-07-05); not cut
-over, nothing reads from it yet. 92 tests green, no known
-failures — `tests/conftest.py` makes the suite hermetic (forces
-demo mode so it passes identically in CI and on a dev machine
-that has already run `backfill`).
+replay, data-quality badges, config-hash footer. NSE bhavcopy data
+layer v2 built and validated, running side-by-side (2-week evidence
+clock started 2026-07-05); not cut over, nothing reads from it yet.
+Robustness hardening (v0.7 Item 6) shipped 2026-07-05 — P0
+stale-server fix, config overrides, parser resilience, `/api/health`,
+log rotation, manual golden-harness CI. UI depth (v0.7 Item 5) not
+started. 115 tests green, no known failures — `tests/conftest.py`
+makes the suite hermetic (forces demo mode so it passes identically
+in CI and on a dev machine that has already run `backfill`).
 
 ---
 
@@ -236,38 +239,48 @@ Ordered by daily-use value, not effort.
       filter chips built from the result set, sticky header. No pagination
       (cap already exists).
 
-## 6. Robustness hardening (v0.7 track)
+## 6. Robustness hardening (v0.7 track) — done 2026-07-05
 
-- [ ] **P0 — stale-server fix**: webapp loads panels once at startup;
-      after nightly `update`, a long-running server screens yesterday's
-      data. Fix: record store mtime in `_load_state`; on each /api/screen
-      and /api/status, if mtime changed → rebuild state (under the
-      existing lock) and clear cross-section cache. Acceptance test:
-      monkeypatched store swap mid-session changes as_of without restart.
-- [ ] **Data-quality badges on matches** — per-symbol flags surfaced in
-      results, not buried in verify: recent >40% jump within the spark
-      window (adjustment/demerger risk — "levels may straddle a gap"),
-      thin history (<250 bars), symbol-stale (last bar < store's latest,
-      e.g. suspended names). Backend adds `flags: []` per match; UI shows
-      a small ⚠ with reason. Acceptance: demo symbol engineered per flag.
-- [ ] **User config overrides** — optional data/config_local.toml
-      overriding tunables (tolerances, liquidity gate, SR params, spark
-      bars) without code edits; effective config hash logged with every
-      screen-log entry and shown in the methodology footer (a screen is
-      only reproducible if its config is part of the record).
-- [ ] **Parser resilience** — one retry on malformed JSON; failed parses
-      appended to data/parse_failures.jsonl (query + raw output) as the
-      vocabulary-improvement backlog; /api/parse returns the canonical
-      "assumptions" list when the LLM filled a default so the UI can
-      render "interpreted with defaults: …".
-- [ ] **`/api/health`** — cheap JSON for cron/uptime monitoring: store
-      mtime + as-of, panel count, benchmark present, log writable,
-      version (git describe). Nightly pipeline curls it after update.
-- [ ] **Screen-log rotation** — size-capped rotation (keep last ~5k
-      runs); verify's integrity check learns about rotated files.
-- [ ] **Golden harness in CI (manual)** — workflow_dispatch job using an
-      ANTHROPIC_API_KEY repo secret, so parser-prompt PRs can be gated
-      without a local run.
+- [x] **P0 — stale-server fix**: `_load_state()` now records the
+      store's mtime and rebuilds (under the existing lock, clearing the
+      cross-section cache too) whenever it changes — no more silently
+      screening yesterday's data after a nightly `update`. Acceptance
+      test passes: a monkeypatched store swap mid-session changes
+      `as_of` without a restart.
+- [x] **Data-quality badges on matches** — `flags: []` per match
+      (`jump`, `thin_history`, `stale`), UI shows a small ⚠ with reason
+      in a tooltip. Three new demo symbols (JUMPY/THINHIST/STALECO)
+      exercise each flag; also live-verified against the real store,
+      where it correctly flagged a genuine recently-listed Nifty 500
+      name (CPPLUS) as `thin_history`.
+- [x] **User config overrides** — `data/config_local.toml` overrides an
+      allowlist (liquidity gate, staleness window, the 4 SR
+      pivot/clustering constants — moved from `sr.py` into `config.py`
+      so overrides actually take effect, `sr.py` keeps aliases for
+      compatibility — spark bars, match cap). Unknown keys flagged and
+      ignored. `config.config_hash()` logged with every screen-log entry
+      and shown in the methodology footer.
+- [x] **Parser resilience** — one retry on malformed JSON before giving
+      up; failures (post-retry invalid JSON, or DSL validation failure)
+      logged to `data/parse_failures.jsonl` — legitimate scope refusals
+      are deliberately excluded. `parser.parse_with_assumptions()`
+      returns the LLM's optional "assumptions" list; `/api/parse`
+      surfaces it, UI renders "interpreted with defaults: …".
+      `parser.parse()` stays a backward-compatible thin wrapper.
+- [x] **`/api/health`** — mode, as-of, store mtime, panel count,
+      benchmark presence, log writability, `git describe --dirty`,
+      config hash. Live-curled and confirmed correct.
+- [x] **Screen-log rotation** — past 5,000 lines, oldest entries move to
+      `data/screen_log.rotated.jsonl`; `verify.check_screen_log` checks
+      both files' JSONL integrity together.
+- [x] **Golden harness in CI (manual)** — `.github/workflows/
+      golden-harness.yml`, `workflow_dispatch` only, needs an
+      `ANTHROPIC_API_KEY` repo secret.
+
+All new UI surfaces (data-quality badge, config-hash footer,
+assumptions display) driven live against the real server with a
+temporary Playwright harness, not just unit-tested — same discipline as
+Item 4. 23 new tests, 115 total.
 
 ## 7. Recurring operations (not one-time)
 

@@ -1,7 +1,8 @@
-"""Demo universe — eight synthetic stocks with distinct, engineered
+"""Demo universe — eleven synthetic stocks with distinct, engineered
 behaviours so the web UI is fully explorable before any live backfill.
 Activated automatically when data/prices.parquet is absent; the UI shows a
-prominent DEMO banner.
+prominent DEMO banner. The last three (JUMPY, THINHIST, STALECO) exist
+solely to exercise the data-quality badges (ROADMAP Item 6).
 """
 from __future__ import annotations
 
@@ -13,11 +14,13 @@ from . import indicators
 _RNG = np.random.default_rng(7)
 
 
-def _panel(closes: np.ndarray, vol_last_ratio: float = 1.0) -> pd.DataFrame:
+def _panel(closes: np.ndarray, vol_last_ratio: float = 1.0,
+          end: pd.Timestamp | None = None) -> pd.DataFrame:
     n = len(closes)
-    end = pd.Timestamp.today().normalize()
-    if end.dayofweek >= 5:                 # weekend → last business day
-        end -= pd.offsets.BDay(1)
+    if end is None:
+        end = pd.Timestamp.today().normalize()
+        if end.dayofweek >= 5:              # weekend → last business day
+            end -= pd.offsets.BDay(1)
     dates = pd.bdate_range(end=end, periods=n)
     close = pd.Series(closes, index=dates)
     noise = 1 + _RNG.normal(0, 0.002, n)
@@ -76,14 +79,28 @@ def build_demo() -> tuple[dict[str, pd.DataFrame], pd.DataFrame, pd.Series]:
     panels["DRIFTR"] = _panel(
         100 + np.cumsum(_RNG.normal(0, 0.25, 600)))       # noise
 
+    # data-quality-flag exemplars (ROADMAP Item 6: badges on matches)
+    jumpy = _trend(600, 0.0015)
+    jumpy[-30] = jumpy[-31] * 1.45                         # engineered >40% jump
+    jumpy[-29:] = jumpy[-30] * np.cumprod(1 + np.full(29, 0.0008))
+    panels["JUMPY"] = _panel(jumpy)                        # jump flag
+
+    panels["THINHIST"] = _panel(_trend(80, 0.001))         # thin_history flag
+
+    stale_end = pd.Timestamp.today().normalize() - pd.offsets.BDay(15)
+    panels["STALECO"] = _panel(_trend(600, 0.0005), end=stale_end)  # stale flag
+
     uni = pd.DataFrame({
         "symbol": list(panels),
         "name": ["Pullback Industries", "Steady Compounders",
                  "Breakdown Metals", "Rangebound Retail",
                  "Breakout Chemicals", "Oversold Textiles",
-                 "Golden Cross Finance", "Drifter Media"],
+                 "Golden Cross Finance", "Drifter Media",
+                 "Jumpy Adjustments Ltd.", "Thin History Corp.",
+                 "Stale Suspended Co."],
         "industry": ["Capital Goods", "IT", "Metals", "Retail",
-                     "Chemicals", "Textiles", "Financials", "Media"],
+                     "Chemicals", "Textiles", "Financials", "Media",
+                     "Realty", "Services", "Power"],
     })
     idx = panels["STEADY"].index
     bench = pd.Series(100 * np.cumprod(1 + np.full(len(idx), 0.0007)),

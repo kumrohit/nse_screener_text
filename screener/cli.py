@@ -76,12 +76,14 @@ def cmd_verify(args) -> None:
     panels = indicators.build_panels(prices)
     bhav_prices = (pd.read_parquet(config.BHAVCOPY_STORE)
                   if config.BHAVCOPY_STORE.exists() else None)
-    from .webapp import LOG_FILE
+    from .webapp import LOG_FILE, ROTATED_LOG_FILE
     log_lines = (LOG_FILE.read_text().strip().splitlines()
                 if LOG_FILE.exists() else None)
+    rotated_lines = (ROTATED_LOG_FILE.read_text().strip().splitlines()
+                     if ROTATED_LOG_FILE.exists() else None)
     results = verify.verify_store(
         prices, uni, data_ingest.load_benchmark(), panels, bhav_prices,
-        log_lines)
+        log_lines, rotated_lines)
     _sys.exit(verify.print_report(results))
 
 

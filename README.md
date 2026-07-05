@@ -42,7 +42,7 @@ python -m screener.cli backfill            # one-time: Nifty 500 list + 5y histo
 ```
 
 No data yet? `python -m screener.webapp` works immediately — it boots into a
-labelled 8-stock demo universe so you can explore the interface first.
+labelled 11-stock demo universe so you can explore the interface first.
 
 Keep it fresh with a nightly job (after 18:30 IST, once NSE close data settles):
 
@@ -73,10 +73,12 @@ python -m screener.webapp        # http://127.0.0.1:8501
 
 Three ways to define a screen: type it in **plain English** and hit
 **Interpret query** to see exactly how it was understood (plain English +
-the compiled JSON spec) before running; paste a raw **JSON spec**; or pick
-from the **preset dropdown** — 19 curated screens grouped by intent (trend
-continuation, breakouts, reversals, relative strength, bearish), each shown
-with its rationale and compiled English, no API key needed.
+the compiled JSON spec, plus any canonical defaults the parser filled in
+that you didn't state explicitly) before running; paste a raw **JSON
+spec**; or pick from the **preset dropdown** — 19 curated screens grouped
+by intent (trend continuation, breakouts, reversals, relative strength,
+bearish), each shown with its rationale and compiled English, no API
+key needed.
 
 An **as-of date picker** replays any historical date — evaluation, metrics,
 and charts all reflect that date, so you can see exactly what a screen
@@ -93,14 +95,22 @@ charting platform. A **near-misses** section (with a hide/show toggle)
 shows stocks that failed exactly one condition, so you can see the
 boundary of your filter. Large result sets are capped at 100 displayed
 matches with a note showing the true total — **export matches to CSV**
-downloads whatever's currently displayed.
+downloads whatever's currently displayed. Match cards also carry a
+small **⚠ data-quality badge** when something's worth a second look —
+an unadjusted-looking jump within the chart window, thin history, or a
+symbol that's stopped updating (possibly suspended) — with the reason
+in a tooltip.
 
 Every run is logged to `data/screen_log.jsonl` (spec + as-of date + matches
-— the full replay trail); browse it with `python -m screener.cli log`, or
-from the UI's **recent screens** panel, which replays any past run with
-one click (restores the spec and as-of date).
+— the full replay trail; rotates to `screen_log.rotated.jsonl` past 5,000
+entries); browse it with `python -m screener.cli log`, or from the UI's
+**recent screens** panel, which replays any past run with one click
+(restores the spec and as-of date). The methodology footer shows a short
+config hash — a screen is only truly reproducible together with the
+tunables that produced it (see [Configuration](#configuration) below),
+not the spec alone.
 
-With no price store yet, the app boots into a labelled 8-stock demo
+With no price store yet, the app boots into a labelled 11-stock demo
 universe so everything above is explorable immediately after clone.
 
 ## CLI usage
@@ -163,15 +173,26 @@ Nifty 500 constituents from NSE's official index CSV; daily OHLCV from Yahoo Fin
 
 An NSE bhavcopy-based data layer (official OHLCV + delivery %, our own corporate-action adjustment) is being built and validated **side by side** with the store above via `python -m screener.cli bhavcopy-update` — it isn't used by any screen yet. See [TECHNICAL_DESIGN.md §4a](TECHNICAL_DESIGN.md).
 
+## Configuration
+
+Every tunable (liquidity gate, staleness window, support/resistance pivot and clustering parameters, spark-chart bar count, match-display cap) lives in `screener/config.py` and can be overridden without code edits by dropping a `data/config_local.toml`:
+
+```toml
+MIN_MEDIAN_TURNOVER_CR = 1.0   # stricter liquidity gate
+SR_CLUSTER_TOL_PCT = 1.5       # wider support/resistance clustering
+```
+
+Unknown keys are flagged and ignored rather than silently doing nothing. The effective config is hashed and recorded with every screen (log entry + methodology footer), so a result is only ever reproducible together with the config that produced it.
+
 ## Tests
 
 ```bash
-python -m pytest tests/                    # 92 tests: synthetic series with known answers,
+python -m pytest tests/                    # 115 tests: synthetic series with known answers,
                                            # evidence-layer agreement, web API contract
 python -m tests.golden_harness             # live parser scoring vs 19 hand-verified queries
 ```
 
-CI runs the offline suite on every push. The live harness gates any change to the parser prompt: 19/19 or it doesn't ship.
+CI runs the offline suite on every push. The live harness gates any change to the parser prompt: 19/19 or it doesn't ship (also runnable as a manual GitHub Actions job — `.github/workflows/golden-harness.yml`).
 
 ## Roadmap
 

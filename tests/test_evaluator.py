@@ -352,7 +352,7 @@ class TestWebAPI:
         assert m["conditions_passed"] == m["conditions_total"] == 2
         assert all(e["passed"] and e["evidence"] for e in m["evidence"])
         assert j["english"].startswith("Screening for")
-        assert j["stats"]["universe"] == 8
+        assert j["stats"]["universe"] == 11
         assert "methodology" in j
 
     def test_screen_rejects_bad_spec(self):
@@ -371,6 +371,135 @@ class TestWebAPI:
         assert j["stats"]["near_misses"] >= 1
         nm = j["near_misses"][0]
         assert nm["conditions_passed"] == 1
+
+
+class TestDataQualityFlags:
+    """ROADMAP Item 6: per-symbol flags surfaced on match cards, not
+    buried in `verify`. JUMPY/THINHIST/STALECO in demo.py exist solely
+    to exercise these."""
+    client = TestClient(app)
+
+    def _flags_for(self, symbol):
+        spec = {"conditions": [{"type": "range", "field": "rsi", "min": 0}]}
+        j = self.client.post("/api/screen", json={"spec": spec}).json()
+        row = next((m for m in j["matches"] + j["near_misses"]
+                   if m["symbol"] == symbol), None)
+        assert row is not None, f"{symbol} not found in results"
+        return {f["code"] for f in row["flags"]}
+
+    def test_jump_flag(self):
+        assert "jump" in self._flags_for("JUMPY")
+
+    def test_thin_history_flag(self):
+        assert "thin_history" in self._flags_for("THINHIST")
+
+    def test_stale_flag(self):
+        assert "stale" in self._flags_for("STALECO")
+
+    def test_clean_symbol_has_no_flags(self):
+        assert self._flags_for("STEADY") == set()
+
+
+class TestStaleServerFix:
+    """P0 (ROADMAP Item 6): a long-running server must notice
+    `python -m screener.cli update` writing a fresh store overnight,
+    not keep screening the panels it loaded at startup forever."""
+
+    @staticmethod
+    def _write_store(path, dated_closes):
+        rows = [{"symbol": "ONLY", "date": pd.Timestamp(d),
+                "open": c, "high": c, "low": c, "close": c,
+                "volume": 1_000_000.0} for d, c in dated_closes]
+        pd.DataFrame(rows).to_parquet(path, index=False)
+
+    def test_state_rebuilds_on_store_mtime_change(self, tmp_path, monkeypatch):
+        import time as _time
+        from screener import config, data_ingest, universe, webapp
+
+        store = tmp_path / "prices.parquet"
+        bars = [(f"2024-01-{i + 1:02d}", 100.0) for i in range(9)] + \
+               [("2024-02-01", 100.0)]
+        self._write_store(store, bars)
+
+        uni = pd.DataFrame({"symbol": ["ONLY"], "name": ["Only Co"],
+                            "industry": ["Services"]})
+        monkeypatch.setattr(config, "PRICE_STORE", store)
+        monkeypatch.setattr(data_ingest, "assert_fresh",
+                            lambda prices: prices["date"].max())
+        monkeypatch.setattr(universe, "fetch_universe", lambda: uni)
+        monkeypatch.setattr(data_ingest, "load_benchmark", lambda: None)
+
+        webapp._state.clear()
+        try:
+            st1 = webapp._load_state()
+            assert st1["as_of"] == "2024-02-01"
+
+            _time.sleep(1.05)  # filesystem mtime resolution safety margin
+            self._write_store(store, bars + [("2024-04-15", 101.0)])
+
+            st2 = webapp._load_state()
+            assert st2["as_of"] == "2024-04-15"
+            assert webapp._load_state() is st2  # unchanged mtime -> no rebuild
+        finally:
+            webapp._state.clear()  # restore demo mode for the rest of the suite
+
+
+class TestConfigOverrides:
+    def test_config_hash_changes_with_override(self, monkeypatch):
+        from screener import config
+        h1 = config.config_hash()
+        monkeypatch.setattr(config, "MIN_MEDIAN_TURNOVER_CR",
+                            config.MIN_MEDIAN_TURNOVER_CR + 1)
+        assert config.config_hash() != h1
+
+    def test_load_local_overrides_applies_known_key(self, tmp_path, monkeypatch):
+        from screener import config
+        toml_path = tmp_path / "config_local.toml"
+        toml_path.write_text("MIN_MEDIAN_TURNOVER_CR = 2.5\n")
+        monkeypatch.setattr(config, "LOCAL_CONFIG_FILE", toml_path)
+        applied = config._load_local_overrides()
+        try:
+            assert applied == {"MIN_MEDIAN_TURNOVER_CR": 2.5}
+            assert config.MIN_MEDIAN_TURNOVER_CR == 2.5
+        finally:
+            # _load_local_overrides mutates config's globals() directly,
+            # which monkeypatch can't auto-undo
+            config.MIN_MEDIAN_TURNOVER_CR = 0.5
+
+    def test_load_local_overrides_ignores_unknown_key(self, tmp_path,
+                                                       monkeypatch):
+        from screener import config
+        toml_path = tmp_path / "config_local.toml"
+        toml_path.write_text("NOT_A_REAL_SETTING = 42\n")
+        monkeypatch.setattr(config, "LOCAL_CONFIG_FILE", toml_path)
+        assert config._load_local_overrides() == {}
+        assert not hasattr(config, "NOT_A_REAL_SETTING")
+
+    def test_no_file_means_no_overrides(self, tmp_path, monkeypatch):
+        from screener import config
+        monkeypatch.setattr(config, "LOCAL_CONFIG_FILE",
+                            tmp_path / "does_not_exist.toml")
+        assert config._load_local_overrides() == {}
+
+    def test_sr_module_aliases_track_config(self):
+        from screener import config, sr
+        assert sr.PIVOT_K == config.PIVOT_K
+        assert sr.SR_LOOKBACK == config.SR_LOOKBACK
+
+
+class TestHealthEndpoint:
+    client = TestClient(app)
+
+    def test_health_reports_demo_mode(self):
+        r = self.client.get("/api/health")
+        assert r.status_code == 200
+        j = r.json()
+        assert j["mode"] == "demo"
+        assert j["panel_count"] == 11
+        assert j["store_mtime"] is None  # nothing on disk in demo mode
+        assert j["log_writable"] is True
+        assert isinstance(j["version"], str) and j["version"]
+        assert "config_hash" in j
 
 
 # ---------------------------------------------------------------- verify
@@ -446,6 +575,59 @@ class TestVerify:
         name, status, detail = verify.check_screen_log(lines)
         assert status == verify.FAIL
         assert "2/3" in detail
+
+    def test_screen_log_includes_rotated_entries(self):
+        import json
+        active = [json.dumps({"ts": "x", "as_of": "latest", "spec": {},
+                              "stats": {}, "matched": []})]
+        rotated = [json.dumps({"ts": "y", "as_of": "latest", "spec": {},
+                               "stats": {}, "matched": []})
+                  for _ in range(2)]
+        name, status, detail = verify.check_screen_log(active, rotated)
+        assert status == verify.PASS
+        assert "1 active" in detail and "2 rotated" in detail
+
+    def test_screen_log_corrupt_rotated_line_fails(self):
+        import json
+        active = [json.dumps({"ts": "x", "as_of": "latest", "spec": {},
+                              "stats": {}, "matched": []})]
+        rotated = ["{not valid json"]
+        name, status, detail = verify.check_screen_log(active, rotated)
+        assert status == verify.FAIL
+
+
+class TestScreenLogRotation:
+    def test_rotate_moves_overflow_to_archive(self, tmp_path, monkeypatch):
+        from screener import webapp
+        log = tmp_path / "screen_log.jsonl"
+        rotated = tmp_path / "screen_log.rotated.jsonl"
+        n = webapp.MAX_LOG_LINES + 50
+        log.write_text("\n".join(f'{{"n":{i}}}' for i in range(n)) + "\n")
+        monkeypatch.setattr(webapp, "LOG_FILE", log)
+        monkeypatch.setattr(webapp, "ROTATED_LOG_FILE", rotated)
+
+        webapp._rotate_log_if_needed()
+
+        active_lines = log.read_text().splitlines()
+        rotated_lines = rotated.read_text().splitlines()
+        assert len(active_lines) == webapp.MAX_LOG_LINES
+        assert len(rotated_lines) == 50
+        # oldest entries rotated out, newest kept in the active file
+        assert rotated_lines[0] == '{"n":0}'
+        assert active_lines[-1] == f'{{"n":{n - 1}}}'
+
+    def test_no_rotation_below_threshold(self, tmp_path, monkeypatch):
+        from screener import webapp
+        log = tmp_path / "screen_log.jsonl"
+        rotated = tmp_path / "screen_log.rotated.jsonl"
+        log.write_text("\n".join(f'{{"n":{i}}}' for i in range(10)) + "\n")
+        monkeypatch.setattr(webapp, "LOG_FILE", log)
+        monkeypatch.setattr(webapp, "ROTATED_LOG_FILE", rotated)
+
+        webapp._rotate_log_if_needed()
+
+        assert len(log.read_text().splitlines()) == 10
+        assert not rotated.exists()
 
 
 class TestJumpDiagnostics:

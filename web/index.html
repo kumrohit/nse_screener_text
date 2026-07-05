@@ -144,6 +144,7 @@
   <div class="interp" id="interp">
     <div class="eyebrow">Compiled interpretation — verify before trusting results</div>
     <div class="english" id="english"></div>
+    <div class="pdesc" id="assumptions" style="margin-top:8px"></div>
     <details><summary>show compiled filter spec (JSON)</summary><pre id="specPre"></pre></details>
   </div>
 
@@ -263,6 +264,11 @@ async function interpret(){
     spec=r.spec;
     $("english").textContent=r.english;
     $("specPre").textContent=JSON.stringify(r.spec,null,2);
+    const a=$("assumptions");
+    if(r.assumptions && r.assumptions.length){
+      a.innerHTML=`<b style="color:var(--text)">Interpreted with defaults:</b> ${r.assumptions.join("; ")}`;
+      a.style.display="block";
+    } else { a.style.display="none" }
     $("interp").style.display="block";
     $("btnRun").disabled=false;
   }catch(e){err(e.message)}
@@ -368,6 +374,7 @@ function render(r){
         <span class="mini">3M ${signed(m.metrics.ret_3m_pct)}</span>
         <span class="mini">RSI <b>${fmt(m.metrics.rsi)}</b></span>
         <span class="mini"><b class="${miss?"neg":"pos"}">${m.conditions_passed}/${m.conditions_total}</b> conditions</span>
+        ${m.flags && m.flags.length ? `<span class="mini" style="color:var(--fail)" title="${m.flags.map(f=>f.reason).join(" | ").replace(/"/g,"&quot;")}">⚠ ${m.flags.length} data flag${m.flags.length>1?"s":""}</span>` : ""}
       </div>
       <div class="mbody">
         ${spark(m)}
@@ -408,7 +415,7 @@ function render(r){
   }
   $("results").innerHTML=html;
 
-  $("foot").innerHTML=`<b style="color:var(--text)">Methodology.</b> ${r.methodology.data}. Liquidity gate: ${r.methodology.liquidity_gate}. Missing-data policy: ${r.methodology.nan_policy}. Every screen is fully determined by the compiled spec above plus the as-of date — rerun with the same spec on the same data and you get the same result. Definitions of every condition: TECHNICAL_DESIGN.md.`;
+  $("foot").innerHTML=`<b style="color:var(--text)">Methodology.</b> ${r.methodology.data}. Liquidity gate: ${r.methodology.liquidity_gate}. Missing-data policy: ${r.methodology.nan_policy}. Every screen is fully determined by the compiled spec above plus the as-of date <i>and</i> the effective config (hash <code>${r.methodology.config_hash}</code>) — rerun with the same spec on the same data and config and you get the same result. Definitions of every condition: TECHNICAL_DESIGN.md.`;
   window.scrollTo({top:$("stats").offsetTop-16,behavior:"smooth"});
 }
 init();

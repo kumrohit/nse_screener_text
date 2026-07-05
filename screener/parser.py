@@ -141,26 +141,83 @@ Rules:
    the user states them.
 3. Default logic is AND. Use OR only when the user says "or"/"either".
 4. as_of is "latest" unless the user names a date (then ISO YYYY-MM-DD).
+5. Optionally include a top-level "assumptions" list: short strings
+   naming any numeric threshold you filled from a canonical default
+   because the user gave no explicit number or qualifier (e.g. "no
+   volume multiplier stated — used the default 1.5x"). Omit the key
+   entirely when the mapping was unambiguous.
 """
 
+PARSE_FAILURES_FILE = config.DATA_DIR / "parse_failures.jsonl"
 
-def parse(text: str) -> dict:
+
+def _log_parse_failure(query: str, raw: str, reason: str) -> None:
+    """Vocabulary-improvement backlog: queries the parser genuinely
+    couldn't turn into a usable spec (not scope refusals — those are
+    the parser working as intended)."""
+    import datetime as _dt
+    try:
+        config.DATA_DIR.mkdir(parents=True, exist_ok=True)
+        with open(PARSE_FAILURES_FILE, "a") as fh:
+            fh.write(json.dumps({
+                "ts": _dt.datetime.now().isoformat(timespec="seconds"),
+                "query": query, "raw": raw, "reason": reason,
+            }) + "\n")
+    except OSError:
+        pass  # logging must never break parsing
+
+
+def _try_parse_json(raw: str) -> tuple[dict | None, str | None]:
+    cleaned = raw.removeprefix("```json").removeprefix("```") \
+        .removesuffix("```").strip()
+    try:
+        return json.loads(cleaned), None
+    except json.JSONDecodeError as exc:
+        return None, str(exc)
+
+
+def parse_with_assumptions(text: str) -> tuple[dict, list[str]]:
+    """Like parse(), but also returns the LLM's self-reported list of
+    canonical defaults it filled in beyond what the user stated
+    explicitly, so the UI can render "interpreted with defaults: …"
+    instead of a compiled spec's numbers being a silent surprise."""
     import anthropic
 
     client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
-    resp = client.messages.create(
-        model=config.ANTHROPIC_MODEL,
-        max_tokens=1000,
-        system=SYSTEM_PROMPT,
-        messages=[{"role": "user", "content": text}],
-    )
-    raw = resp.content[0].text.strip()
-    raw = raw.removeprefix("```json").removeprefix("```").removesuffix("```")
-    try:
-        spec = json.loads(raw)
-    except json.JSONDecodeError as exc:
-        raise dsl.DSLValidationError(
-            f"parser returned invalid JSON: {raw[:200]}") from exc
+
+    def _call(extra: str | None = None) -> str:
+        messages = [{"role": "user", "content": text}]
+        if extra:
+            messages.append({"role": "user", "content": extra})
+        resp = client.messages.create(
+            model=config.ANTHROPIC_MODEL, max_tokens=1000,
+            system=SYSTEM_PROMPT, messages=messages)
+        return resp.content[0].text.strip()
+
+    raw = _call()
+    spec, err = _try_parse_json(raw)
+    if spec is None:
+        # malformed JSON is a prompt-following failure, not a scope
+        # refusal — worth one corrective retry before giving up.
+        raw = _call("That was not valid JSON. Output ONLY the raw JSON "
+                    "object — no markdown fences, no commentary.")
+        spec, err = _try_parse_json(raw)
+        if spec is None:
+            _log_parse_failure(text, raw, f"invalid JSON after retry: {err}")
+            raise dsl.DSLValidationError(
+                f"parser returned invalid JSON: {raw[:200]}")
+
     if "error" in spec:
         raise dsl.DSLValidationError(f"cannot map query: {spec['error']}")
-    return dsl.validate(spec)
+
+    assumptions = spec.pop("assumptions", [])
+    try:
+        validated = dsl.validate(spec)
+    except dsl.DSLValidationError as exc:
+        _log_parse_failure(text, raw, f"DSL validation failed: {exc}")
+        raise
+    return validated, assumptions
+
+
+def parse(text: str) -> dict:
+    return parse_with_assumptions(text)[0]

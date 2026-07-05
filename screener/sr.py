@@ -25,10 +25,15 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-PIVOT_K = 5
-SR_LOOKBACK = 250
-SR_MIN_TOUCHES = 2
-SR_CLUSTER_TOL_PCT = 1.0
+from . import config
+
+# Defaults live in config.py (overridable via data/config_local.toml —
+# ROADMAP Item 6); kept as module aliases here so existing callers that
+# reference sr.PIVOT_K etc. still work.
+PIVOT_K = config.PIVOT_K
+SR_LOOKBACK = config.SR_LOOKBACK
+SR_MIN_TOUCHES = config.SR_MIN_TOUCHES
+SR_CLUSTER_TOL_PCT = config.SR_CLUSTER_TOL_PCT
 
 
 def find_pivots(df: pd.DataFrame, k: int = PIVOT_K
