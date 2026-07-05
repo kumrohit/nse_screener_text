@@ -33,6 +33,11 @@ DEFAULTS = {
     "proximity": {"lookback": 3},
     "cross": {"lookback": 3},
     "breakout_resistance": {"lookback": 5, "buffer_pct": 0},
+    "candle": {"lookback": 1},
+    "bb_squeeze": {"percentile": 20, "lookback": 252},
+    "flat_base": {"bars": 20, "max_range_pct": 12,
+                  "max_from_52w_high_pct": 15},
+    "tight_range": {"bars": 10},
 }
 
 

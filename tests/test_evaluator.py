@@ -425,3 +425,106 @@ class TestJumpDiagnostics:
         hints = dict(zip(j["symbol"], j["hint"]))
         assert "UNADJUSTED" in hints["SYM0"]
         assert "real event" in hints["SYM1"]
+
+
+# ---------------------------------------------------------------- patterns
+def _candle_panel(rows):
+    """rows: list of (o,h,l,c); padded with 60 flat warm-up bars."""
+    pad = [(100, 100.5, 99.5, 100)] * 60
+    data = pad + rows
+    dates = pd.bdate_range("2024-01-01", periods=len(data))
+    df = pd.DataFrame(data, columns=["open", "high", "low", "close"],
+                      index=dates)
+    df["volume"] = 1e6
+    return indicators.compute_panel(df)
+
+
+class TestCandles:
+    def _match(self, panel, pattern, lookback=1):
+        return evaluate_symbol(panel, dsl.validate({"conditions": [
+            {"type": "candle", "pattern": pattern, "lookback": lookback}]}))
+
+    def test_inside_bar(self):
+        p = _candle_panel([(100, 106, 94, 103), (101, 104, 96, 99)])
+        assert self._match(p, "inside_bar")
+        assert not self._match(p, "nr7")
+
+    def test_nr7(self):
+        rows = [(100, 108, 92, 100)] * 6 + [(100, 101, 99.5, 100.5)]
+        assert self._match(_candle_panel(rows), "nr7")
+
+    def test_bullish_engulfing(self):
+        p = _candle_panel([(104, 104.5, 99, 100), (99.5, 106, 99, 105)])
+        assert self._match(p, "bullish_engulfing")
+        assert not self._match(p, "bearish_engulfing")
+
+    def test_hammer_and_star(self):
+        h = _candle_panel([(103, 103.6, 95, 103.4)])   # long lower wick
+        assert self._match(h, "hammer")
+        s = _candle_panel([(97, 105, 96.6, 96.8)])     # long upper wick
+        assert self._match(s, "shooting_star")
+        assert not self._match(s, "hammer")
+
+    def test_lookback(self):
+        p = _candle_panel([(100, 106, 94, 103), (101, 104, 96, 99),
+                           (98, 107, 97, 106)])  # inside bar 1 bar ago
+        assert not self._match(p, "inside_bar", lookback=1)
+        assert self._match(p, "inside_bar", lookback=2)
+
+
+class TestConsolidation:
+    def test_tight_range_and_flat_base(self):
+        up = 100 * np.cumprod(1 + np.full(280, 0.002))
+        flat = np.concatenate([up, up[-1] * (1 + RNG.normal(0, 0.004, 20))])
+        p = _mk_ohlcv(flat)
+        assert evaluate_symbol(p, dsl.validate({"conditions": [
+            {"type": "tight_range", "bars": 15, "max_range_pct": 8}]}))
+        assert evaluate_symbol(p, dsl.validate({"conditions": [
+            {"type": "flat_base"}]}))
+        # far below the 52w high -> tight range yes, flat base no
+        crash = np.concatenate([up, up[-1] * 0.6
+                                * (1 + RNG.normal(0, 0.004, 30))])
+        pc = _mk_ohlcv(crash)
+        assert evaluate_symbol(pc, dsl.validate({"conditions": [
+            {"type": "tight_range", "bars": 15, "max_range_pct": 8}]}))
+        assert not evaluate_symbol(pc, dsl.validate({"conditions": [
+            {"type": "flat_base"}]}))
+
+    def test_bb_squeeze(self):
+        wild = 100 * np.cumprod(1 + RNG.normal(0, 0.02, 280))
+        calm = np.concatenate([wild, wild[-1]
+                               * (1 + RNG.normal(0, 0.001, 25))])
+        assert evaluate_symbol(_mk_ohlcv(calm), dsl.validate({"conditions": [
+            {"type": "bb_squeeze", "percentile": 20}]}))
+        assert not evaluate_symbol(_mk_ohlcv(wild), dsl.validate(
+            {"conditions": [{"type": "bb_squeeze", "percentile": 5}]}))
+
+
+class TestPresets:
+    def test_all_presets_validate_and_describe(self):
+        from screener import presets
+        assert len(presets.PRESETS) >= 12
+        ids = [p["id"] for p in presets.PRESETS]
+        assert len(ids) == len(set(ids))
+        for p in presets.PRESETS:
+            assert dsl.describe(dsl.validate(p["spec"]))
+            assert p["description"] and p["group"]
+
+    def test_presets_endpoint_and_screen(self):
+        client = TestClient(app)
+        r = client.get("/api/presets")
+        assert r.status_code == 200
+        items = r.json()
+        assert any(i["id"] == "support_50ema_uptrend" for i in items)
+        assert all("english" in i and "spec" in i for i in items)
+        # every preset must actually run against the demo universe
+        for i in items:
+            rr = client.post("/api/screen", json={"spec": i["spec"]})
+            assert rr.status_code == 200, i["id"]
+
+    def test_pattern_explain(self):
+        from screener import explain
+        p = _candle_panel([(100, 106, 94, 103), (101, 104, 96, 99)])
+        ev = explain.explain_symbol(p, dsl.validate({"conditions": [
+            {"type": "candle", "pattern": "inside_bar"}]}))
+        assert ev[0]["passed"] and "inside_bar on" in ev[0]["evidence"]

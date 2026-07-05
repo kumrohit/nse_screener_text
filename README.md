@@ -71,7 +71,7 @@ FAIL so it can gate a cron pipeline (`... update && ... verify && ...`).
 python -m screener.webapp        # http://127.0.0.1:8501
 ```
 
-Type a screen in plain English, hit **Interpret query** to see exactly how it
+A **preset dropdown** offers 14 curated screens grouped by intent (trend continuation, breakouts, reversals, relative strength, bearish) — pick one to load its spec, see its plain-English compilation, and run it, no API key needed. Or type a screen in plain English, hit **Interpret query** to see exactly how it
 was understood (plain English + the compiled JSON spec), then **Run screen**.
 Every match expands into an **evidence trail**: each condition with a ✓/✗ and
 the observed values behind it — which bar touched the EMA and how close, the
@@ -93,6 +93,8 @@ python -m screener.cli screen "breaking out above resistance and outperforming t
 python -m screener.cli screen --dry-run "strong trend stocks pulling back to the 20 EMA"
 
 # save results
+python -m screener.cli presets                  # list pre-configured screens
+python -m screener.cli screen --preset flat_base_52w
 python -m screener.cli screen --out hits.csv "near support with huge volume"
 
 # power users: raw spec, no LLM, no API key
@@ -116,6 +118,10 @@ python -m screener.cli screen --json '{"logic":"AND","conditions":[
 | "breaking out above resistance" | close crossed a prior multi-touch resistance level |
 | "outperforming the Nifty" | 3-month return above the Nifty 50's |
 | "on the weekly chart" | condition evaluated on weekly bars |
+| "inside bar", "NR7", "hammer", "bullish engulfing"… | exact candlestick formulas (see design doc §9a) |
+| "consolidating" / "tight range" | 10-bar range ≤ 8% |
+| "volatility squeeze" / "coiling" | Bollinger bandwidth in bottom 20% of its year |
+| "flat base" | 20-bar range ≤ 12% within 15% of the 52-week high |
 | "up 10% in a month", "between 40 and 60" | explicit numbers pass straight through |
 
 Anything it can't map to the documented vocabulary — P/E ratios, news, "good management" — returns an explicit error instead of a silently wrong screen.

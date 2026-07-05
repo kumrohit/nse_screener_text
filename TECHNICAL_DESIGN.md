@@ -105,6 +105,12 @@ Levels are built per symbol, per as-of row, from pivots in the trailing 250 bars
 
 Parameter choices (k=5, 250-bar lookback, 1% cluster tolerance, 2-touch minimum) are defensible defaults, not optimised values — they live in `sr.py` constants and are candidates for sensitivity analysis in Phase 3.
 
+## 9a. Pattern definitions
+
+Candlestick and consolidation conditions use these exact formulas (bar j; body = |close−open|, range = high−low, wicks measured from body edges). **Inside bar**: high < previous high AND low > previous low. **NR7**: range is the strict minimum of the last 7 bars. **Bullish engulfing**: previous bar red, current bar green, current open ≤ previous close and current close ≥ previous open (bodies only; wicks ignored). **Bearish engulfing**: exact mirror. **Hammer**: lower wick ≥ 2× body AND upper wick ≤ 30% of range. **Shooting star**: mirror. `candle` conditions accept a lookback (default 1 = latest bar only). **Tight range**: (max high − min low) / min low over N bars ≤ threshold. **BB squeeze**: current Bollinger bandwidth ≤ the given percentile of its own trailing 252-bar distribution (≥60 observations required, else fails closed). **Flat base**: tight range over 20 bars (≤12%) AND close within 15% of the 52-week high — the pre-breakout base structure. These definitions are deliberately strict and singular; trader phrases map to them via the canonical vocabulary or not at all.
+
+A curated preset library (`presets.py`, 14 named screens grouped by intent — trend continuation, breakouts, reversals, relative strength, bearish) exposes ready-made specs via `GET /api/presets` (web dropdown), `screener presets`, and `screener screen --preset <id>`. Every preset is validated at import time, so DSL changes that break a preset fail the test suite immediately.
+
 ## 9. Evaluator semantics
 
 Conditions are pure functions `(panel, condition, row_index) → bool`. NaN anywhere in a condition's inputs yields False (a stock with insufficient history cannot match — it is never accidentally included). `as_of` resolves to the last row at or before the given date, independently for daily and weekly panels. `logic` applies flat AND/OR across conditions; nested boolean trees are explicitly out of scope for v1 (the parser refuses queries requiring them). The runner applies the liquidity gate, evaluates each symbol, and emits a result row of screening context: close, % vs EMA50, RSI, volume ratio, 1M/3M returns, distance from 52-week high, plus name and industry from the universe file, sorted by 3-month return.
@@ -133,6 +139,7 @@ Phase 3 (next): screen backtesting — for any DSL spec, compute historical hit 
 ## 14. Changelog
 
 0.1 — Data layer (Nifty 500, yfinance 5y, Parquet), daily indicator engine, 8-condition DSL with validation and English echo, LLM parser with canonical vocabulary, CLI, 16 synthetic tests.
+0.4 — Pattern conditions (candle: inside_bar/nr7/engulfing×2/hammer/shooting_star; tight_range, bb_squeeze, flat_base) with exact documented formulas, explainers, parser vocabulary; 14-screen preset library with grouped web-UI dropdown, /api/presets, CLI presets/--preset; 2 new golden fixtures. 47 tests.
 0.3.2 — `verify --jumps` diagnostic (lists smell-test bars with split-ratio classification hints) and `refetch SYMBOL` remedy command. 37 tests.
 0.3.1 — `verify` command automating the §10 checklist (verify.py, 3 tests), Python≥3.10 guards on entry points, README first-run checklist and troubleshooting. 36 tests.
 0.3 — Web UI: FastAPI backend + single-page evidence-trail frontend, explain.py observability layer, near-miss reporting, synthetic demo mode, 33 tests.

@@ -95,8 +95,19 @@ def cmd_refetch(args) -> None:
     print(f"{sym}: {before} rows dropped, {len(fresh)} re-fetched")
 
 
+def cmd_presets(_args) -> None:
+    from . import dsl as _dsl, presets
+    for p in presets.PRESETS:
+        print(f"{p['id']:<28} [{p['group']}] {p['name']}")
+        print(f"{'':28} {_dsl.describe(p['spec'])}\n")
+
+
 def cmd_screen(args) -> None:
-    if args.json:
+    if getattr(args, "preset", None):
+        from . import presets
+        spec = presets.get(args.preset)["spec"]
+        spec = dsl.validate(spec)
+    elif args.json:
         spec = dsl.validate(json.loads(args.query))
     else:
         from . import parser
@@ -146,8 +157,15 @@ def main() -> None:
     rf.add_argument("symbol")
     rf.set_defaults(func=cmd_refetch)
 
+    sub.add_parser("presets",
+                   help="list pre-configured screens"
+                   ).set_defaults(func=cmd_presets)
+
     sc = sub.add_parser("screen")
-    sc.add_argument("query", help="natural-language filter or JSON spec")
+    sc.add_argument("query", nargs="?", default="",
+                    help="natural-language filter or JSON spec")
+    sc.add_argument("--preset", help="run a pre-configured screen by id "
+                                     "(see `presets` command)")
     sc.add_argument("--json", action="store_true",
                     help="query is a raw DSL JSON spec (skips the LLM)")
     sc.add_argument("--dry-run", action="store_true",

@@ -39,9 +39,9 @@
   button:hover{filter:brightness(1.12)}
   button:disabled{opacity:.4;cursor:default}
   button:focus-visible{outline:2px solid var(--pass);outline-offset:2px}
-  .chips{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px}
-  .chip{font-family:var(--sans);font-size:11.5px;padding:4px 11px;border:1px solid var(--line);border-radius:12px;color:var(--muted);cursor:pointer;background:none}
-  .chip:hover{color:var(--amber);border-color:var(--amber-dim)}
+  select{background:var(--bg);border:1px solid var(--line);border-radius:4px;color:var(--text);font-family:var(--sans);font-size:12.5px;padding:7px 10px;min-width:280px;max-width:100%}
+  select:focus{outline:2px solid var(--amber-dim)}
+  .pdesc{font-family:var(--sans);font-size:12px;color:var(--muted);margin-top:8px;display:none;border-left:2px solid var(--line);padding-left:10px}
 
   /* interpretation */
   .interp{margin-top:22px;background:var(--panel);border:1px solid var(--line);border-left:3px solid var(--amber);border-radius:4px;padding:16px 18px;display:none}
@@ -114,7 +114,13 @@
       <button id="btnRun" onclick="run()" disabled>Run screen</button>
       <span class="spin" id="spin">▮▮▮</span>
     </div>
-    <div class="chips" id="chips"></div>
+    <div class="row" style="margin-top:14px">
+      <label class="eyebrow" for="presetSel" style="margin:0">Preset screens</label>
+      <select id="presetSel" onchange="pickPreset()">
+        <option value="">— choose a pre-configured screen —</option>
+      </select>
+    </div>
+    <div class="pdesc" id="pdesc"></div>
   </div>
 
   <div class="err" id="err"></div>
@@ -132,22 +138,22 @@
 </div>
 
 <script>
-const PRESETS = [
-  ["Support at 50 EMA + uptrend", {logic:"AND",conditions:[
-    {type:"support_at_ma",ma:"ema_50",tolerance_pct:1.5,lookback:3},
-    {type:"trend",direction:"up"}]}],
-  ["Golden cross", {logic:"AND",conditions:[
-    {type:"cross",fast:"ema_50",slow:"ema_200",direction:"above",lookback:5}]}],
-  ["Oversold (RSI ≤ 30)", {logic:"AND",conditions:[
-    {type:"range",field:"rsi",max:30}]}],
-  ["Breakout + volume spike", {logic:"AND",conditions:[
-    {type:"breakout_resistance",lookback:5},
-    {type:"volume_spike",min_ratio:1.5}]}],
-  ["Near support, beating Nifty", {logic:"AND",conditions:[
-    {type:"near_support",tolerance_pct:2.5},
-    {type:"rel_strength",window:63,op:">",value_pct:0}]}],
-];
+let PRESETS = [];   // loaded from /api/presets
 let tab="en", spec=null;
+
+function pickPreset(){
+  const id = $("presetSel").value;
+  const p = PRESETS.find(x=>x.id===id);
+  const d = $("pdesc");
+  if(!p){d.style.display="none";return}
+  setTab("js");
+  $("qJs").value = JSON.stringify(p.spec, null, 2);
+  spec = null;
+  $("interp").style.display="none";
+  $("btnRun").disabled = false;
+  d.innerHTML = `<b style="color:var(--text)">${p.name}.</b> ${p.description}<br>Compiles to: ${p.english}`;
+  d.style.display = "block";
+}
 
 function $(id){return document.getElementById(id)}
 function setTab(t){tab=t;
@@ -172,12 +178,17 @@ async function api(path, body){
 }
 
 async function init(){
-  PRESETS.forEach(([label,s])=>{
-    const c=document.createElement("button");c.className="chip";c.textContent=label;
-    c.onclick=()=>{setTab("js");$("qJs").value=JSON.stringify(s,null,2);
-      spec=null;$("interp").style.display="none";$("btnRun").disabled=false};
-    $("chips").appendChild(c);
-  });
+  try{
+    PRESETS = await api("/api/presets");
+    const sel = $("presetSel"), groups = {};
+    PRESETS.forEach(p=>{(groups[p.group]=groups[p.group]||[]).push(p)});
+    for(const [g,items] of Object.entries(groups)){
+      const og=document.createElement("optgroup");og.label=g;
+      items.forEach(p=>{const o=document.createElement("option");
+        o.value=p.id;o.textContent=p.name;og.appendChild(o)});
+      sel.appendChild(og);
+    }
+  }catch(e){/* presets unavailable — dropdown stays empty */}
   try{
     const s=await api("/api/status");
     $("status").innerHTML=`data as of <b>${s.as_of}</b> · <b>${s.universe_size}</b> symbols · ${s.history_years}y daily`+

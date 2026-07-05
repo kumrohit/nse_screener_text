@@ -267,3 +267,114 @@ def run_screen(panels: dict[str, pd.DataFrame], screen: dict,
         out = out.sort_values("ret_3m_pct", ascending=False)\
                  .reset_index(drop=True)
     return out
+
+
+# ------------------------------------------------------------ patterns
+# Exact definitions (TECHNICAL_DESIGN.md §9a). j indexes a single bar.
+def _body(p, j):
+    return abs(p["close"].iloc[j] - p["open"].iloc[j])
+
+
+def _pat_inside_bar(p, j) -> bool:
+    return (j >= 1
+            and p["high"].iloc[j] < p["high"].iloc[j - 1]
+            and p["low"].iloc[j] > p["low"].iloc[j - 1])
+
+
+def _pat_nr7(p, j) -> bool:
+    if j < 6:
+        return False
+    rng = (p["high"] - p["low"]).iloc[j - 6: j + 1]
+    return bool(rng.iloc[-1] == rng.min() and (rng.iloc[:-1] > rng.iloc[-1]).all())
+
+
+def _pat_bullish_engulfing(p, j) -> bool:
+    if j < 1:
+        return False
+    po, pc = p["open"].iloc[j - 1], p["close"].iloc[j - 1]
+    o, c = p["open"].iloc[j], p["close"].iloc[j]
+    return pc < po and c > o and o <= pc and c >= po
+
+
+def _pat_bearish_engulfing(p, j) -> bool:
+    if j < 1:
+        return False
+    po, pc = p["open"].iloc[j - 1], p["close"].iloc[j - 1]
+    o, c = p["open"].iloc[j], p["close"].iloc[j]
+    return pc > po and c < o and o >= pc and c <= po
+
+
+def _pat_hammer(p, j) -> bool:
+    h, l = p["high"].iloc[j], p["low"].iloc[j]
+    o, c = p["open"].iloc[j], p["close"].iloc[j]
+    rng = h - l
+    if rng <= 0:
+        return False
+    lower = min(o, c) - l
+    upper = h - max(o, c)
+    return lower >= 2 * _body(p, j) and upper <= 0.3 * rng
+
+
+def _pat_shooting_star(p, j) -> bool:
+    h, l = p["high"].iloc[j], p["low"].iloc[j]
+    o, c = p["open"].iloc[j], p["close"].iloc[j]
+    rng = h - l
+    if rng <= 0:
+        return False
+    lower = min(o, c) - l
+    upper = h - max(o, c)
+    return upper >= 2 * _body(p, j) and lower <= 0.3 * rng
+
+
+PATTERNS = {
+    "inside_bar": _pat_inside_bar, "nr7": _pat_nr7,
+    "bullish_engulfing": _pat_bullish_engulfing,
+    "bearish_engulfing": _pat_bearish_engulfing,
+    "hammer": _pat_hammer, "shooting_star": _pat_shooting_star,
+}
+
+
+def cond_candle(panel, c, i) -> bool:
+    lb = int(c.get("lookback", 1))
+    fn = PATTERNS[c["pattern"]]
+    return any(fn(panel, j) for j in range(max(0, i - lb + 1), i + 1))
+
+
+def cond_tight_range(panel, c, i) -> bool:
+    bars = int(c.get("bars", 10))
+    if i - bars + 1 < 0:
+        return False
+    win = panel.iloc[i - bars + 1: i + 1]
+    lo = win["low"].min()
+    if pd.isna(lo) or lo <= 0:
+        return False
+    span = 100 * (win["high"].max() - lo) / lo
+    return _cmp(span, "<=", float(c["max_range_pct"]))
+
+
+def cond_bb_squeeze(panel, c, i) -> bool:
+    lb = int(c.get("lookback", 252))
+    pct = float(c.get("percentile", 20))
+    hist = panel["bb_width_pct"].iloc[max(0, i - lb + 1): i + 1].dropna()
+    cur = panel["bb_width_pct"].iloc[i]
+    if pd.isna(cur) or len(hist) < 60:
+        return False
+    return _cmp(cur, "<=", float(np.percentile(hist, pct)))
+
+
+def cond_flat_base(panel, c, i) -> bool:
+    """Extended tight range near the 52-week high — pre-breakout base."""
+    bars = int(c.get("bars", 20))
+    max_range = float(c.get("max_range_pct", 12))
+    max_off_high = float(c.get("max_from_52w_high_pct", 15))
+    if not cond_tight_range(panel, {"bars": bars,
+                                    "max_range_pct": max_range}, i):
+        return False
+    off = panel["pct_from_52w_high"].iloc[i]
+    return _cmp(off, ">=", -max_off_high)
+
+
+DISPATCH.update({
+    "candle": cond_candle, "tight_range": cond_tight_range,
+    "bb_squeeze": cond_bb_squeeze, "flat_base": cond_flat_base,
+})

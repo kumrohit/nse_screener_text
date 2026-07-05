@@ -90,6 +90,15 @@ def status():
             "history_years": config.HISTORY_YEARS}
 
 
+@app.get("/api/presets")
+def presets_list():
+    from . import presets
+    return [{"id": p["id"], "name": p["name"], "group": p["group"],
+             "description": p["description"], "spec": p["spec"],
+             "english": dsl.describe(p["spec"])}
+            for p in presets.PRESETS]
+
+
 @app.post("/api/parse")
 def parse(body: ParseIn):
     from . import parser

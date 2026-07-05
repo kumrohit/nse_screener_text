@@ -62,6 +62,18 @@ Canonical vocabulary (ALWAYS use these mappings):
   ("over the last month" -> window 21; "this week" -> window 5)
 - "weekly uptrend" / "uptrend on the weekly chart" ->
   {"type":"trend","direction":"up","timeframe":"weekly"}
+
+Pattern conditions:
+- {"type":"candle","pattern":P,"lookback":N} where P is one of:
+  inside_bar, nr7, bullish_engulfing, bearish_engulfing, hammer,
+  shooting_star. lookback defaults to 1 (latest bar); "recent <pattern>"
+  -> lookback 3.
+- "consolidating" / "trading in a tight range" ->
+  {"type":"tight_range","bars":10,"max_range_pct":8}
+- "volatility squeeze" / "Bollinger squeeze" / "coiling" ->
+  {"type":"bb_squeeze","percentile":20,"lookback":252}
+- "flat base" / "basing near highs" ->
+  {"type":"flat_base","bars":20,"max_range_pct":12,"max_from_52w_high_pct":15}
 - "uptrend" / "in an uptrend" -> {"type":"trend","direction":"up"}
 - "downtrend" -> {"type":"trend","direction":"down"}
 - "taking support at <MA>" / "bouncing off <MA>" ->
