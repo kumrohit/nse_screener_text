@@ -5,13 +5,15 @@ commits that complete them; anything descoped gets struck through with a
 one-line reason, not silently deleted. Design rationale lives in
 TECHNICAL_DESIGN.md; this file is the *what and in which order*.
 
-Status snapshot: v0.5 shipped — data layer live-verified (500/500),
-16-condition DSL, patterns, 14 presets, web UI with evidence trails,
-sparklines, as-of replay, screen log. 50 tests green.
+Status snapshot: v0.6 shipped — data layer live-verified (500/500),
+19-condition DSL (incl. sector filters & cross-sectional relative
+strength), patterns, 17 presets, web UI with evidence trails,
+sparklines, as-of replay, screen log. 64 tests green (3 known
+local-environment failures unrelated to app code — see Item 0).
 
 ---
 
-## 0. One-time setup & validation (do before/alongside Item 2)
+## 0. One-time setup & validation
 
 - [x] **Push to GitHub** — single permanent working folder, retire the
       `_v1`-style folder copies. Done 2026-07-05: stray `latest` remote
@@ -45,55 +47,65 @@ Deferred from this item — see §6 below: **live golden-query harness
 run** (`python -m tests.golden_harness`, needs `ANTHROPIC_API_KEY`,
 unavailable in the current dev environment).
 
-## 1. Item 2 — Sector filters & cross-sectional relative strength
+## 1. Item 2 — Sector filters & cross-sectional relative strength ✅ done 2026-07-05
 
 The one structural change: a **cross-sectional pre-pass** computed over
 the whole universe per date, cached like the benchmark. Everything else
 hangs off it.
 
-- [ ] **`screener/cross_section.py`** — per-date universe-wide table:
+- [x] **`screener/cross_section.py`** — per-date universe-wide table:
       RS percentile of each stock (63-bar return rank, configurable
       window), equal-weight sector aggregate returns, sector momentum
       ranks. Computed lazily from panels, cached in-process keyed by
-      (as_of, window); no disk state in v1. Acceptance: pure function
+      (id(panels), as_of, window); no disk state. Pure function
       panels→DataFrame; deterministic; NaN-safe (thin-history symbols
-      excluded from ranks, never defaulted to 0th/100th percentile).
-- [ ] **DSL: `sector` condition** — `{"type":"sector","in":[…]}` matching
-      the universe file's industry column (exact strings; validation
-      rejects unknown sector names with the list of valid ones).
-      Evaluator needs access to universe metadata — thread it through
-      like benchmark.
-- [ ] **DSL: `rs_percentile` condition** —
+      excluded from ranks via pandas' `rank(na_option="keep")`, never
+      defaulted to 0th/100th percentile).
+- [x] **DSL: `sector` condition** — `{"type":"sector","in":[…]}` matching
+      the universe file's industry column (20 exact strings in
+      `dsl.KNOWN_SECTORS`; validation rejects unknown names with the
+      list of valid ones). `evaluate_symbol`/`run_screen` gained
+      `symbol`/`sector_by_symbol` params (threaded through like
+      benchmark; both default `None`, so existing call sites are
+      unchanged).
+- [x] **DSL: `rs_percentile` condition** —
       `{"type":"rs_percentile","window":63,"op":">=","value":80}`.
-      Semantics: percentile among symbols with sufficient history on the
-      as-of date.
-- [ ] **DSL: `sector_rank` condition** —
-      `{"type":"sector_rank","window":63,"top":3}` — stock's sector is in
-      the top-N by equal-weight momentum. Document equal-weight
-      construction explicitly (no cap weights available).
-- [ ] **Historical as-of correctness** — cross-sectional values at an
-      as-of date must use only data ≤ that date (ranks recomputed at the
-      as-of row, not sliced from today's ranks). Dedicated look-ahead
-      test, same spirit as the pivot test.
-- [ ] **Explainers** — rs_percentile: rank, N, actual return vs cutoff
-      return. sector_rank: sector, its rank, top-3 list with returns.
-      sector: stock's industry string.
-- [ ] **Parser vocabulary** — "IT stocks / in the IT sector",
-      "RS above 80", "market leaders", "in a leading/top sector".
-      Ambiguity rule: bare sector adjectives map to `sector` only when
-      they match a known industry string; otherwise refuse.
-- [ ] **Presets** — add 2–3: sector-leader pullback (top-3 sector +
-      support_at_ma), RS>80 near 52w high, lagging-sector bounce
-      (bearish/contrarian, clearly labelled).
-- [ ] **Golden fixtures** — ≥3 new queries incl. one refusal (unknown
-      sector name).
-- [ ] **Tests** — synthetic multi-symbol universe with engineered sector
-      dispersion; percentile edge cases (ties, thin history); ≥8 new
-      tests. Suite target: ~60.
-- [ ] **Docs** — DSL table rows, §"cross-sectional pre-pass" section,
-      README vocab rows, changelog 0.6.
-- [ ] **Perf check** — pre-pass over 500 symbols × 5y must add <5s to a
-      screen on the MacBook Air; if not, memoise harder before shipping.
+      Percentile among symbols with sufficient history on the as-of date.
+- [x] **DSL: `sector_rank` condition** —
+      `{"type":"sector_rank","window":63,"top":3}` (or `"bottom":3`, a
+      small symmetric extension beyond the literal spec, needed for the
+      lagging-sector preset — mutually exclusive, validated the same way
+      as trend up/down). Equal-weight construction documented in
+      TECHNICAL_DESIGN.md §6a (no cap weights available).
+- [x] **Historical as-of correctness** — verified by a dedicated
+      look-ahead test: two sectors whose relative performance flips
+      between an early as-of date and "latest" rank in opposite order at
+      each date (`TestCrossSection.test_no_lookahead`).
+- [x] **Explainers** — `_ex_rs_percentile` (return, percentile, cutoff),
+      `_ex_sector_rank` (sector, rank, top-3 leaders with returns),
+      `_ex_sector` (stock's industry string).
+- [x] **Parser vocabulary** — sector short-forms ("IT" → Information
+      Technology, "pharma" → Healthcare, etc.), "RS above N", "market
+      leaders"/"top sector", "lagging sector". Refuses when a sector
+      adjective doesn't clearly match one of the 20 allowed strings.
+- [x] **Presets** — `sector_leader_pullback` (top-3 sector +
+      support_at_ma), `rs_leader_near_high` (RS≥80 near 52w high),
+      `lagging_sector_bounce` (bottom-3 sector + hammer, clearly labelled
+      contrarian). 17 presets total.
+- [x] **Golden fixtures** — 4 new (IT-sector uptrend, RS-above-80 near
+      52w high, market-leaders sector_rank, and an unknown-sector
+      refusal). 14 → 18 fixtures.
+- [x] **Tests** — synthetic 3-sector/9-symbol universe with engineered
+      momentum dispersion + a thin-history symbol; 14 new tests
+      (`TestCrossSection`, `TestSectorConditions`, plus 3 DSL validation
+      tests). Suite: 50 → 64, all green except the 3 pre-existing
+      local-environment failures noted in Item 0 (unrelated).
+- [x] **Docs** — DSL table + new §6a in TECHNICAL_DESIGN.md, README vocab
+      rows, changelog 0.6.
+- [x] **Perf check** — measured on the live 500-symbol/5y store: a
+      screen using `sector_rank`+`rs_percentile` (cold cache) was not
+      measurably slower than a plain screen (both ~0.2s) — well under
+      the 5s budget.
 
 ## 2. Item 3 — NSE bhavcopy migration (data layer v2)
 

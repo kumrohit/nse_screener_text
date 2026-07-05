@@ -127,6 +127,9 @@ def screen(body: ScreenIn):
     matches, near_misses = [], []
     evaluated = liquidity_excluded = 0
 
+    sector_by_symbol, cross_section = evaluator._cross_sectional_context(
+        spec, st["panels"], st["universe"], as_of)
+
     for sym, panel in st["panels"].items():
         i = evaluator._row_at(panel, as_of)
         if i is None or i < 0:
@@ -139,8 +142,9 @@ def screen(body: ScreenIn):
             liquidity_excluded += 1
             continue
         evaluated += 1
-        evidence = explain.explain_symbol(panel, spec, as_of,
-                                          benchmark=st["benchmark"])
+        evidence = explain.explain_symbol(
+            panel, spec, as_of, benchmark=st["benchmark"], symbol=sym,
+            sector_by_symbol=sector_by_symbol, cross_section=cross_section)
         n_passed = sum(e["passed"] for e in evidence)
         matched = (n_passed == len(evidence) if logic == "AND"
                    else n_passed > 0)

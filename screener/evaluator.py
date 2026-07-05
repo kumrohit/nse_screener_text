@@ -167,6 +167,52 @@ def cond_rel_strength(panel, c, i, benchmark: pd.Series | None = None
     return _cmp(rs, c["op"], float(c["value_pct"]))
 
 
+def cond_sector(panel, c, i, symbol: str | None = None,
+               sector_by_symbol: pd.Series | None = None) -> bool:
+    if sector_by_symbol is None or symbol is None:
+        raise RuntimeError(
+            "sector condition requires universe metadata. Run "
+            "`python -m screener.cli backfill` (or pass universe=... to "
+            "run_screen) so industry classifications are available.")
+    sec = sector_by_symbol.get(symbol)
+    if sec is None or pd.isna(sec):
+        return False
+    return sec in c["in"]
+
+
+def cond_rs_percentile(panel, c, i, symbol: str | None = None,
+                       cross_section: pd.DataFrame | None = None) -> bool:
+    if cross_section is None:
+        raise RuntimeError(
+            "rs_percentile condition requires the cross-sectional "
+            "pre-pass (screener.cross_section). This is wired up "
+            "automatically by run_screen/webapp when universe is passed.")
+    if symbol not in cross_section.index:
+        return False
+    val = cross_section.loc[symbol, "rs_percentile"]
+    if pd.isna(val):
+        return False
+    return _cmp(float(val), c["op"], float(c["value"]))
+
+
+def cond_sector_rank(panel, c, i, symbol: str | None = None,
+                     cross_section: pd.DataFrame | None = None) -> bool:
+    if cross_section is None:
+        raise RuntimeError(
+            "sector_rank condition requires the cross-sectional "
+            "pre-pass (screener.cross_section). This is wired up "
+            "automatically by run_screen/webapp when universe is passed.")
+    if symbol not in cross_section.index:
+        return False
+    rank, n = (cross_section.loc[symbol, "sector_rank"],
+              cross_section.loc[symbol, "n_sectors"])
+    if pd.isna(rank) or pd.isna(n):
+        return False
+    if "top" in c:
+        return bool(rank <= c["top"])
+    return bool(rank > (n - c["bottom"]))
+
+
 DISPATCH = {
     "compare": cond_compare, "proximity": cond_proximity,
     "trend": cond_trend, "support_at_ma": cond_support_at_ma,
@@ -176,6 +222,11 @@ DISPATCH = {
     "near_resistance": cond_near_resistance,
     "breakout_resistance": cond_breakout_resistance,
 }
+
+# Condition types that need cross-symbol context beyond a single panel
+# (universe metadata / the cross-sectional pre-pass) — dispatched
+# specially in evaluate_symbol/explain_symbol rather than via DISPATCH.
+CROSS_SECTIONAL_TYPES = {"sector", "rs_percentile", "sector_rank"}
 
 # weekly trend uses the weekly panel's own EMA set
 def _weekly_trend(wpanel, c, i) -> bool:
@@ -203,7 +254,11 @@ def _row_at(panel: pd.DataFrame, as_of) -> int | None:
 def evaluate_symbol(panel: pd.DataFrame, screen: dict,
                     as_of: str | None = None,
                     weekly: pd.DataFrame | None = None,
-                    benchmark: pd.Series | None = None) -> bool:
+                    benchmark: pd.Series | None = None,
+                    symbol: str | None = None,
+                    sector_by_symbol: pd.Series | None = None,
+                    cross_section: dict[int, pd.DataFrame] | None = None
+                    ) -> bool:
     from . import indicators
 
     i = _row_at(panel, as_of)
@@ -223,6 +278,14 @@ def evaluate_symbol(panel: pd.DataFrame, screen: dict,
             return DISPATCH[c["type"]](weekly, c, wi)
         if c["type"] == "rel_strength":
             return cond_rel_strength(panel, c, i, benchmark=benchmark)
+        if c["type"] == "sector":
+            return cond_sector(panel, c, i, symbol=symbol,
+                               sector_by_symbol=sector_by_symbol)
+        if c["type"] in ("rs_percentile", "sector_rank"):
+            cs = (cross_section or {}).get(int(c.get("window", 63)))
+            fn = cond_rs_percentile if c["type"] == "rs_percentile" \
+                else cond_sector_rank
+            return fn(panel, c, i, symbol=symbol, cross_section=cs)
         return DISPATCH[c["type"]](panel, c, i)
 
     results = (one(c) for c in screen["conditions"])
@@ -230,11 +293,31 @@ def evaluate_symbol(panel: pd.DataFrame, screen: dict,
         else any(results)
 
 
+def _cross_sectional_context(screen: dict, panels: dict[str, pd.DataFrame],
+                             universe: pd.DataFrame | None, as_of):
+    """Sector lookup + the cross-sectional pre-pass, computed once per
+    screen (not per symbol) — the structural change that makes
+    `sector`/`rs_percentile`/`sector_rank` conditions affordable."""
+    sector_by_symbol = (universe.set_index("symbol")["industry"]
+                        if universe is not None else None)
+    windows = {int(c.get("window", 63)) for c in screen["conditions"]
+              if c["type"] in ("rs_percentile", "sector_rank")}
+    cross_section = {}
+    if windows and universe is not None:
+        from . import cross_section as cs_mod
+        cross_section = {w: cs_mod.build_cross_section(panels, universe,
+                                                        as_of, w)
+                         for w in windows}
+    return sector_by_symbol, cross_section
+
+
 def run_screen(panels: dict[str, pd.DataFrame], screen: dict,
                universe: pd.DataFrame | None = None,
                min_turnover_cr: float = 0.0,
                benchmark: pd.Series | None = None) -> pd.DataFrame:
     as_of = screen.get("as_of", "latest")
+    sector_by_symbol, cross_section = _cross_sectional_context(
+        screen, panels, universe, as_of)
     rows = []
     for sym, panel in panels.items():
         last = panel.iloc[-1]
@@ -243,7 +326,9 @@ def run_screen(panels: dict[str, pd.DataFrame], screen: dict,
                 and panel["turnover_cr"].tail(20).median()
                 >= min_turnover_cr):
             continue
-        if evaluate_symbol(panel, screen, as_of, benchmark=benchmark):
+        if evaluate_symbol(panel, screen, as_of, benchmark=benchmark,
+                           symbol=sym, sector_by_symbol=sector_by_symbol,
+                           cross_section=cross_section):
             rows.append({
                 "symbol": sym,
                 "close": round(last["close"], 2),

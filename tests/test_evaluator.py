@@ -170,6 +170,23 @@ class TestDSLValidation:
         txt = dsl.describe(dsl.validate(SUPPORT_UPTREND))
         assert "EMA 50" in txt and "uptrend" in txt
 
+    def test_unknown_sector_rejected(self):
+        with pytest.raises(dsl.DSLValidationError):
+            dsl.validate({"conditions": [
+                {"type": "sector", "in": ["Crypto"]}]})
+
+    def test_valid_sector_accepted(self):
+        spec = dsl.validate({"conditions": [
+            {"type": "sector", "in": ["Information Technology"]}]})
+        assert "Information Technology" in dsl.describe(spec)
+
+    def test_sector_rank_requires_exactly_one_of_top_bottom(self):
+        with pytest.raises(dsl.DSLValidationError):
+            dsl.validate({"conditions": [{"type": "sector_rank"}]})
+        with pytest.raises(dsl.DSLValidationError):
+            dsl.validate({"conditions": [
+                {"type": "sector_rank", "top": 3, "bottom": 3}]})
+
 
 class TestRunScreen:
     def test_screen_over_universe(self):
@@ -503,7 +520,7 @@ class TestConsolidation:
 class TestPresets:
     def test_all_presets_validate_and_describe(self):
         from screener import presets
-        assert len(presets.PRESETS) >= 12
+        assert len(presets.PRESETS) >= 17
         ids = [p["id"] for p in presets.PRESETS]
         assert len(ids) == len(set(ids))
         for p in presets.PRESETS:
@@ -573,3 +590,160 @@ class TestAsOfAndSpark:
         assert after == before + 1
         r = self.client.get("/api/log")
         assert r.status_code == 200 and r.json()[0]["matched"]
+
+
+# ---------------------------------------------------------------- sector /
+# cross-sectional relative strength (ROADMAP Item 1)
+from screener import cross_section  # noqa: E402
+
+
+def _sector_universe():
+    """3 sectors x 3 symbols with engineered momentum dispersion, plus one
+    thin-history symbol. Sector A: strong recent momentum (best). Sector B:
+    flat, middling. Sector C: sharp decline (worst)."""
+    n = 300
+    panels = {
+        "A1": _mk_ohlcv(100 * np.cumprod(1 + np.full(n, 0.0040))),
+        "A2": _mk_ohlcv(100 * np.cumprod(1 + np.full(n, 0.0035))),
+        "A3": _mk_ohlcv(100 * np.cumprod(1 + np.full(n, 0.0038))),
+        "B1": _mk_ohlcv(100 * np.cumprod(1 + np.full(n, 0.0005))),
+        "B2": _mk_ohlcv(100 * np.cumprod(1 + np.full(n, 0.0004))),
+        "THIN": _mk_ohlcv(100 * np.cumprod(1 + np.full(30, 0.01))),
+        "C1": _mk_ohlcv(100 * np.cumprod(1 - np.full(n, 0.0030))),
+        "C2": _mk_ohlcv(100 * np.cumprod(1 - np.full(n, 0.0028))),
+        "C3": _mk_ohlcv(100 * np.cumprod(1 - np.full(n, 0.0032))),
+    }
+    uni = pd.DataFrame({
+        "symbol": list(panels), "name": list(panels),
+        "industry": ["Sector A"] * 3 + ["Sector B"] * 2 + ["Sector B"]
+                   + ["Sector C"] * 3,
+    })
+    return panels, uni
+
+
+class TestCrossSection:
+    def test_deterministic_pure_function(self):
+        panels, uni = _sector_universe()
+        df1 = cross_section.build_cross_section(dict(panels), uni,
+                                                 "latest", 63)
+        df2 = cross_section.build_cross_section(dict(panels), uni,
+                                                 "latest", 63)
+        pd.testing.assert_frame_equal(df1.sort_index(), df2.sort_index())
+
+    def test_thin_history_excluded_not_defaulted(self):
+        panels, uni = _sector_universe()
+        df = cross_section.build_cross_section(panels, uni, "latest", 63)
+        assert pd.isna(df.loc["THIN", "ret_pct"])
+        assert pd.isna(df.loc["THIN", "rs_percentile"])
+
+    def test_sector_ranking_direction(self):
+        panels, uni = _sector_universe()
+        df = cross_section.build_cross_section(panels, uni, "latest", 63)
+        assert df.loc["A1", "sector_rank"] == 1
+        assert df.loc["B1", "sector_rank"] == 2
+        assert df.loc["C1", "sector_rank"] == 3
+
+    def test_rs_percentile_ordering(self):
+        panels, uni = _sector_universe()
+        df = cross_section.build_cross_section(panels, uni, "latest", 63)
+        assert df.loc["A1", "rs_percentile"] > df.loc["C1", "rs_percentile"]
+
+    def test_no_lookahead(self):
+        """Ranks at an early as_of must reflect only data up to that row —
+        same spirit as the pivot look-ahead test. Sector A crashes then
+        rallies; Sector C does the mirror, so which sector 'wins' flips
+        between the early date and latest."""
+        n, phase1 = 300, 200
+        a = np.concatenate([
+            100 * np.cumprod(1 - np.full(phase1, 0.002))])
+        a = np.concatenate([a, a[-1] * np.cumprod(
+            1 + np.full(n - phase1, 0.006))])
+        c = np.concatenate([
+            100 * np.cumprod(1 + np.full(phase1, 0.002))])
+        c = np.concatenate([c, c[-1] * np.cumprod(
+            1 - np.full(n - phase1, 0.006))])
+        panels = {"A1": _mk_ohlcv(a), "C1": _mk_ohlcv(c)}
+        uni = pd.DataFrame({"symbol": ["A1", "C1"], "name": ["a", "c"],
+                           "industry": ["Sector A", "Sector C"]})
+        early = str(panels["A1"].index[phase1].date())
+        df_early = cross_section.build_cross_section(panels, uni, early, 63)
+        df_latest = cross_section.build_cross_section(panels, uni,
+                                                       "latest", 63)
+        assert (df_early.loc["C1", "rs_percentile"]
+               > df_early.loc["A1", "rs_percentile"])
+        assert (df_latest.loc["A1", "rs_percentile"]
+               > df_latest.loc["C1", "rs_percentile"])
+
+
+class TestSectorConditions:
+    def test_sector_condition_matches(self):
+        panels, uni = _sector_universe()
+        sbs = uni.set_index("symbol")["industry"]
+        spec = {"conditions": [{"type": "sector", "in": ["Sector A"]}]}
+        assert evaluate_symbol(panels["A1"], spec, symbol="A1",
+                               sector_by_symbol=sbs)
+        assert not evaluate_symbol(panels["C1"], spec, symbol="C1",
+                                   sector_by_symbol=sbs)
+
+    def test_sector_condition_requires_context(self):
+        panels, _uni = _sector_universe()
+        spec = {"conditions": [{"type": "sector", "in": ["Sector A"]}]}
+        with pytest.raises(RuntimeError):
+            evaluate_symbol(panels["A1"], spec)
+
+    def test_rs_percentile_threshold(self):
+        panels, uni = _sector_universe()
+        cs = {63: cross_section.build_cross_section(panels, uni,
+                                                     "latest", 63)}
+        spec = {"conditions": [
+            {"type": "rs_percentile", "window": 63, "op": ">=",
+             "value": 80}]}
+        assert evaluate_symbol(panels["A1"], spec, symbol="A1",
+                               cross_section=cs)
+        assert not evaluate_symbol(panels["C1"], spec, symbol="C1",
+                                   cross_section=cs)
+
+    def test_sector_rank_top_and_bottom(self):
+        panels, uni = _sector_universe()
+        cs = {63: cross_section.build_cross_section(panels, uni,
+                                                     "latest", 63)}
+        top = {"conditions": [
+            {"type": "sector_rank", "window": 63, "top": 1}]}
+        bottom = {"conditions": [
+            {"type": "sector_rank", "window": 63, "bottom": 1}]}
+        assert evaluate_symbol(panels["A1"], top, symbol="A1",
+                               cross_section=cs)
+        assert not evaluate_symbol(panels["C1"], top, symbol="C1",
+                                   cross_section=cs)
+        assert evaluate_symbol(panels["C1"], bottom, symbol="C1",
+                               cross_section=cs)
+        assert not evaluate_symbol(panels["A1"], bottom, symbol="A1",
+                                   cross_section=cs)
+
+    def test_via_run_screen_end_to_end(self):
+        panels, uni = _sector_universe()
+        spec = dsl.validate({"conditions": [
+            {"type": "sector_rank", "window": 63, "top": 1}]})
+        res = run_screen(panels, spec, universe=uni)
+        assert set(res["symbol"]) == {"A1", "A2", "A3"}
+
+    def test_explainers(self):
+        # raw dict, not dsl.validate()-ed: the synthetic universe uses
+        # fictional sector labels ("Sector A"), which real validation
+        # correctly rejects (KNOWN_SECTORS is the real Nifty 500 list).
+        from screener import explain
+        panels, uni = _sector_universe()
+        sbs = uni.set_index("symbol")["industry"]
+        cs = {63: cross_section.build_cross_section(panels, uni,
+                                                     "latest", 63)}
+        spec = {"conditions": [
+            {"type": "sector", "in": ["Sector A"]},
+            {"type": "rs_percentile", "window": 63, "op": ">=",
+             "value": 50},
+            {"type": "sector_rank", "window": 63, "top": 1}]}
+        ev = explain.explain_symbol(panels["A1"], spec, symbol="A1",
+                                    sector_by_symbol=sbs, cross_section=cs)
+        assert all(e["passed"] for e in ev)
+        assert "Sector A" in ev[0]["evidence"]
+        assert "percentile" in ev[1]["evidence"]
+        assert "ranked" in ev[2]["evidence"]

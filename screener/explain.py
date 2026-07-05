@@ -192,6 +192,48 @@ def _ex_rel_strength(panel, c, i, benchmark):
                 "relative_pct": diff}
 
 
+def _ex_sector(panel, c, i, symbol, sector_by_symbol):
+    sec = sector_by_symbol.get(symbol) if sector_by_symbol is not None \
+        else None
+    if sec is None or pd.isna(sec):
+        return "sector unknown for this symbol", {}
+    ev = f"sector: {sec} (target: {', '.join(c['in'])})"
+    return ev, {"sector": sec}
+
+
+def _ex_rs_percentile(panel, c, i, symbol, cross_section):
+    if cross_section is None or symbol not in cross_section.index:
+        return "cross-sectional data unavailable", {}
+    row = cross_section.loc[symbol]
+    val = row["rs_percentile"]
+    if pd.isna(val):
+        return "insufficient history for RS percentile", {}
+    ev = (f"{c.get('window', 63)}-bar return {_f(row['ret_pct'])}% ranks "
+          f"at the {_f(val, 1)}th percentile (threshold {c['op']} "
+          f"{c['value']})")
+    return ev, {"ret_pct": _f(row["ret_pct"]), "rs_percentile": _f(val, 1)}
+
+
+def _ex_sector_rank(panel, c, i, symbol, cross_section):
+    if cross_section is None or symbol not in cross_section.index:
+        return "cross-sectional data unavailable", {}
+    row = cross_section.loc[symbol]
+    rank, n, sec, sret = (row["sector_rank"], row["n_sectors"],
+                         row["sector"], row["sector_ret_pct"])
+    if pd.isna(rank):
+        return "sector momentum unavailable (insufficient history)", {}
+    top = (cross_section.drop_duplicates("sector")
+          .dropna(subset=["sector_rank"]).sort_values("sector_rank").head(3))
+    leaders = ", ".join(f"{r['sector']} ({_f(r['sector_ret_pct'])}%)"
+                        for _, r in top.iterrows())
+    label, thresh = ("top", c["top"]) if "top" in c else ("bottom", c["bottom"])
+    ev = (f"sector '{sec}' ranked {int(rank)}/{int(n)} by "
+          f"{c.get('window', 63)}-bar equal-weight return "
+          f"({_f(sret)}%); {label} {thresh} required; leaders: {leaders}")
+    return ev, {"sector": sec, "sector_rank": int(rank), "n_sectors": int(n),
+               "sector_ret_pct": _f(sret)}
+
+
 _EXPLAINERS = {
     "compare": _ex_compare, "proximity": _ex_proximity, "trend": _ex_trend,
     "support_at_ma": _ex_support_at_ma, "cross": _ex_cross,
@@ -204,7 +246,11 @@ _EXPLAINERS = {
 
 def explain_symbol(panel: pd.DataFrame, screen: dict,
                    as_of: str | None = None,
-                   benchmark: pd.Series | None = None) -> list[dict]:
+                   benchmark: pd.Series | None = None,
+                   symbol: str | None = None,
+                   sector_by_symbol: pd.Series | None = None,
+                   cross_section: dict[int, pd.DataFrame] | None = None
+                   ) -> list[dict]:
     """One evidence dict per condition, in screen order."""
     weekly = None
     i = evaluator._row_at(panel, as_of)
@@ -234,6 +280,19 @@ def explain_symbol(panel: pd.DataFrame, screen: dict,
             passed = evaluator.cond_rel_strength(panel, c, i,
                                                  benchmark=benchmark)
             ev, vals = _ex_rel_strength(panel, c, i, benchmark)
+        elif c["type"] == "sector":
+            passed = evaluator.cond_sector(
+                panel, c, i, symbol=symbol, sector_by_symbol=sector_by_symbol)
+            ev, vals = _ex_sector(panel, c, i, symbol, sector_by_symbol)
+        elif c["type"] in ("rs_percentile", "sector_rank"):
+            cs = (cross_section or {}).get(int(c.get("window", 63)))
+            fn_eval = (evaluator.cond_rs_percentile
+                      if c["type"] == "rs_percentile"
+                      else evaluator.cond_sector_rank)
+            fn_ex = (_ex_rs_percentile if c["type"] == "rs_percentile"
+                    else _ex_sector_rank)
+            passed = fn_eval(panel, c, i, symbol=symbol, cross_section=cs)
+            ev, vals = fn_ex(panel, c, i, symbol, cs)
         else:
             passed = evaluator.DISPATCH[c["type"]](panel, c, i)
             ev, vals = _EXPLAINERS[c["type"]](panel, c, i)

@@ -44,6 +44,23 @@ Additional condition types:
 - {"type":"near_resistance","tolerance_pct":N}
 - {"type":"breakout_resistance","lookback":N,"buffer_pct":N}
 - {"type":"rel_strength","window":N,"op":OP,"value_pct":N}
+- {"type":"sector","in":[SECTOR,...]} — SECTOR must be one of the exact
+  strings below; never invent one.
+- {"type":"rs_percentile","window":N,"op":OP,"value":N} — the stock's
+  own N-bar return, ranked as a percentile (0-100) across the whole
+  universe on the as-of date.
+- {"type":"sector_rank","window":N,"top":N} or
+  {"type":"sector_rank","window":N,"bottom":N} — true if the stock's
+  sector is among the top/bottom N sectors by equal-weight N-bar
+  momentum. Exactly one of top/bottom, never both.
+
+Allowed SECTOR values (exact strings, use exactly these):
+Automobile and Auto Components, Capital Goods, Chemicals, Construction,
+Construction Materials, Consumer Durables, Consumer Services,
+Diversified, Fast Moving Consumer Goods, Financial Services, Healthcare,
+Information Technology, Media Entertainment & Publication, Metals &
+Mining, Oil Gas & Consumable Fuels, Power, Realty, Services,
+Telecommunication, Textiles
 Conditions compare/range/trend/change/cross accept optional
 "timeframe":"weekly". Weekly FIELDs are limited to: open, high, low, close,
 volume, ema_10, ema_20, ema_40, ema_10_slope, ema_20_slope, ema_40_slope,
@@ -62,6 +79,20 @@ Canonical vocabulary (ALWAYS use these mappings):
   ("over the last month" -> window 21; "this week" -> window 5)
 - "weekly uptrend" / "uptrend on the weekly chart" ->
   {"type":"trend","direction":"up","timeframe":"weekly"}
+- "<X> stocks" / "in the <X> sector" where <X> matches one of the
+  allowed SECTOR strings (case-insensitively, common short forms like
+  "IT" -> "Information Technology", "auto"/"automobiles" ->
+  "Automobile and Auto Components", "pharma" -> "Healthcare",
+  "banks"/"financials"/"NBFC" -> "Financial Services") ->
+  {"type":"sector","in":[SECTOR]}. If the sector adjective does not
+  clearly match one of the allowed strings, refuse — do not guess.
+- "RS above N" / "relative strength percentile above N" / "outranking
+  N% of the market" -> {"type":"rs_percentile","window":63,"op":">=",
+  "value":N}
+- "market leaders" / "in a leading sector" / "top sector" ->
+  {"type":"sector_rank","window":63,"top":3}
+- "lagging sector" / "weakest sectors" / "bottom sector" ->
+  {"type":"sector_rank","window":63,"bottom":3}
 
 Pattern conditions:
 - {"type":"candle","pattern":P,"lookback":N} where P is one of:

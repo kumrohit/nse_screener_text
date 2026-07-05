@@ -159,6 +159,41 @@ PRESETS: list[dict] = [
             {"type": "trend", "direction": "down"},
             {"type": "near_resistance", "tolerance_pct": 2.5}]},
     },
+    {
+        "id": "sector_leader_pullback",
+        "name": "Pullback in a leading sector",
+        "group": "Relative strength",
+        "description": "50 EMA support inside a sector that's among the "
+                       "top 3 by 3-month equal-weight momentum — buying "
+                       "strength, not hope.",
+        "spec": {"logic": "AND", "conditions": [
+            {"type": "sector_rank", "window": 63, "top": 3},
+            {"type": "support_at_ma", "ma": "ema_50",
+             "tolerance_pct": 1.5, "lookback": 3}]},
+    },
+    {
+        "id": "rs_leader_near_high",
+        "name": "RS leader near 52-week high",
+        "group": "Relative strength",
+        "description": "Top-quintile 3-month relative strength, still "
+                       "within striking distance of new highs.",
+        "spec": {"logic": "AND", "conditions": [
+            {"type": "rs_percentile", "window": 63, "op": ">=",
+             "value": 80},
+            {"type": "range", "field": "pct_from_52w_high", "min": -5}]},
+    },
+    {
+        "id": "lagging_sector_bounce",
+        "name": "Bounce in a lagging sector (contrarian)",
+        "group": "Bearish",
+        "description": "Contrarian/mean-reversion only: a hammer reversal "
+                       "in a sector among the bottom 3 by momentum. Not a "
+                       "trend-following signal — the sector is weak by "
+                       "construction; this is a bet on a short-term bounce.",
+        "spec": {"logic": "AND", "conditions": [
+            {"type": "sector_rank", "window": 63, "bottom": 3},
+            {"type": "candle", "pattern": "hammer", "lookback": 2}]},
+    },
 ]
 
 # fail fast: an invalid preset is a bug, not a runtime condition

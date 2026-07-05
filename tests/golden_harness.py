@@ -38,6 +38,8 @@ DEFAULTS = {
     "flat_base": {"bars": 20, "max_range_pct": 12,
                   "max_from_52w_high_pct": 15},
     "tight_range": {"bars": 10},
+    "rs_percentile": {"window": 63},
+    "sector_rank": {"window": 63},
 }
 
 

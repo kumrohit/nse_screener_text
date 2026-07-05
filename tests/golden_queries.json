@@ -244,5 +244,63 @@
       "error": true
     },
     "note": "fundamental field \u2014 parser must refuse, not improvise"
+  },
+  {
+    "query": "IT stocks in an uptrend",
+    "expected": {
+      "logic": "AND",
+      "conditions": [
+        {
+          "type": "sector",
+          "in": ["Information Technology"]
+        },
+        {
+          "type": "trend",
+          "direction": "up"
+        }
+      ],
+      "as_of": "latest"
+    }
+  },
+  {
+    "query": "stocks with RS above 80 near their 52 week high",
+    "expected": {
+      "logic": "AND",
+      "conditions": [
+        {
+          "type": "rs_percentile",
+          "window": 63,
+          "op": ">=",
+          "value": 80
+        },
+        {
+          "type": "range",
+          "field": "pct_from_52w_high",
+          "min": -5
+        }
+      ],
+      "as_of": "latest"
+    }
+  },
+  {
+    "query": "market leaders in a top sector",
+    "expected": {
+      "logic": "AND",
+      "conditions": [
+        {
+          "type": "sector_rank",
+          "window": 63,
+          "top": 3
+        }
+      ],
+      "as_of": "latest"
+    }
+  },
+  {
+    "query": "stocks in the Crypto sector",
+    "expected": {
+      "error": true
+    },
+    "note": "unmapped sector name \u2014 parser must refuse, not guess the closest match"
   }
 ]

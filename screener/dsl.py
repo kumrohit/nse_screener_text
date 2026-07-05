@@ -61,6 +61,20 @@ CONDITION_TYPES = {
     "near_support", "near_resistance", "breakout_resistance",
     "rel_strength",
     "candle", "tight_range", "bb_squeeze", "flat_base",
+    "sector", "rs_percentile", "sector_rank",
+}
+
+# Nifty 500 universe file's exact industry strings (NSE classification).
+# `sector` conditions validate against this so an unmapped adjective fails
+# loud instead of matching nothing silently.
+KNOWN_SECTORS = {
+    "Automobile and Auto Components", "Capital Goods", "Chemicals",
+    "Construction", "Construction Materials", "Consumer Durables",
+    "Consumer Services", "Diversified", "Fast Moving Consumer Goods",
+    "Financial Services", "Healthcare", "Information Technology",
+    "Media Entertainment & Publication", "Metals & Mining",
+    "Oil Gas & Consumable Fuels", "Power", "Realty", "Services",
+    "Telecommunication", "Textiles",
 }
 
 CANDLE_PATTERNS = {
@@ -180,6 +194,29 @@ def validate(screen: dict) -> dict:
             pass  # percentile/lookback have defaults
         elif ctype == "flat_base":
             pass  # all keys have defaults
+        elif ctype == "sector":
+            _require(c, ["in"])
+            sectors = c["in"]
+            if not isinstance(sectors, list) or not sectors:
+                raise DSLValidationError("sector.in must be a non-empty list")
+            unknown = [s for s in sectors if s not in KNOWN_SECTORS]
+            if unknown:
+                raise DSLValidationError(
+                    f"sector.in: unknown sector(s) {unknown}. "
+                    f"Must be one of {sorted(KNOWN_SECTORS)}")
+        elif ctype == "rs_percentile":
+            _require(c, ["op", "value"])
+            if c["op"] not in VALID_OPS:
+                raise DSLValidationError(f"bad op {c['op']!r}")
+        elif ctype == "sector_rank":
+            has_top, has_bottom = "top" in c, "bottom" in c
+            if has_top == has_bottom:
+                raise DSLValidationError(
+                    "sector_rank needs exactly one of 'top'/'bottom'")
+            n = c.get("top", c.get("bottom"))
+            if not isinstance(n, int) or n < 1:
+                raise DSLValidationError(
+                    "sector_rank top/bottom must be a positive integer")
     return screen
 
 
@@ -277,5 +314,21 @@ def _append_condition(parts: list, c: dict) -> None:
                 f"flat base: {c.get('bars', 20)}-bar range ≤ "
                 f"{c.get('max_range_pct', 12)}% within "
                 f"{c.get('max_from_52w_high_pct', 15)}% of 52-week high")
+        elif t == "sector":
+            parts.append("sector in " + ", ".join(c["in"]))
+        elif t == "rs_percentile":
+            parts.append(
+                f"{c.get('window', 63)}-bar relative-strength percentile "
+                f"{c['op']} {c['value']}")
+        elif t == "sector_rank":
+            w = c.get("window", 63)
+            if "top" in c:
+                parts.append(
+                    f"stock's sector in the top {c['top']} by "
+                    f"{w}-bar equal-weight momentum")
+            else:
+                parts.append(
+                    f"stock's sector in the bottom {c['bottom']} by "
+                    f"{w}-bar equal-weight momentum")
         if c.get("timeframe") == "weekly" and parts:
             parts[-1] += " [weekly]"

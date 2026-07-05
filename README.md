@@ -106,6 +106,7 @@ python -m screener.cli screen "oversold stocks near their 52 week low"
 python -m screener.cli screen "golden cross with a volume spike"
 python -m screener.cli screen "uptrend on the weekly chart but oversold on the daily"
 python -m screener.cli screen "breaking out above resistance and outperforming the Nifty"
+python -m screener.cli screen "IT stocks with RS above 80 near their 52 week high"
 
 # see how a query was interpreted without running it
 python -m screener.cli screen --dry-run "strong trend stocks pulling back to the 20 EMA"
@@ -141,6 +142,10 @@ python -m screener.cli screen --json '{"logic":"AND","conditions":[
 | "consolidating" / "tight range" | 10-bar range ≤ 8% |
 | "volatility squeeze" / "coiling" | Bollinger bandwidth in bottom 20% of its year |
 | "flat base" | 20-bar range ≤ 12% within 15% of the 52-week high |
+| "IT stocks" / "in the Healthcare sector" | exact Nifty 500 industry classification match |
+| "RS above 80" | stock's 3-month return ranks in the 80th percentile of the universe |
+| "market leaders" / "top sector" | stock's sector is in the top 3 by 3-month equal-weight momentum |
+| "lagging sector" | stock's sector is in the bottom 3 by 3-month equal-weight momentum |
 | "up 10% in a month", "between 40 and 60" | explicit numbers pass straight through |
 
 Anything it can't map to the documented vocabulary — P/E ratios, news, "good management" — returns an explicit error instead of a silently wrong screen.
@@ -152,12 +157,12 @@ Nifty 500 constituents from NSE's official index CSV; daily OHLCV from Yahoo Fin
 ## Tests
 
 ```bash
-python -m pytest tests/                    # 50 tests: synthetic series with known answers,
+python -m pytest tests/                    # 64 tests: synthetic series with known answers,
                                            # evidence-layer agreement, web API contract
-python -m tests.golden_harness             # live parser scoring vs 14 hand-verified queries
+python -m tests.golden_harness             # live parser scoring vs 18 hand-verified queries
 ```
 
-CI runs the offline suite on every push. The live harness gates any change to the parser prompt: 14/14 or it doesn't ship.
+CI runs the offline suite on every push. The live harness gates any change to the parser prompt: 18/18 or it doesn't ship.
 
 ## Roadmap
 
