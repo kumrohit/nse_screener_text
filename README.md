@@ -154,10 +154,12 @@ Anything it can't map to the documented vocabulary — P/E ratios, news, "good m
 
 Nifty 500 constituents from NSE's official index CSV; daily OHLCV from Yahoo Finance (`.NS`), split/bonus-adjusted; Nifty 50 index for relative strength. Before any screen runs the tool checks the store isn't stale and applies a liquidity gate. Known caveats (yfinance reliability, a few NSE↔Yahoo ticker mismatches, survivorship in historical screens) are documented in [TECHNICAL_DESIGN.md §4](TECHNICAL_DESIGN.md).
 
+An NSE bhavcopy-based data layer (official OHLCV + delivery %, our own corporate-action adjustment) is being built and validated **side by side** with the store above via `python -m screener.cli bhavcopy-update` — it isn't used by any screen yet. See [TECHNICAL_DESIGN.md §4a](TECHNICAL_DESIGN.md).
+
 ## Tests
 
 ```bash
-python -m pytest tests/                    # 64 tests: synthetic series with known answers,
+python -m pytest tests/                    # 83 tests: synthetic series with known answers,
                                            # evidence-layer agreement, web API contract
 python -m tests.golden_harness             # live parser scoring vs 18 hand-verified queries
 ```

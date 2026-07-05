@@ -5,11 +5,14 @@ commits that complete them; anything descoped gets struck through with a
 one-line reason, not silently deleted. Design rationale lives in
 TECHNICAL_DESIGN.md; this file is the *what and in which order*.
 
-Status snapshot: v0.6 shipped — data layer live-verified (500/500),
+Status snapshot: v0.6.1 — data layer live-verified (500/500),
 19-condition DSL (incl. sector filters & cross-sectional relative
 strength), patterns, 17 presets, web UI with evidence trails,
-sparklines, as-of replay, screen log. 64 tests green (3 known
-local-environment failures unrelated to app code — see Item 0).
+sparklines, as-of replay, screen log. NSE bhavcopy data layer v2 built
+and validated, running side-by-side (2-week evidence clock started
+2026-07-05); not cut over, nothing reads from it yet. 83 tests green
+(3 known local-environment failures unrelated to app code — see
+Item 0).
 
 ---
 
@@ -107,36 +110,56 @@ hangs off it.
       measurably slower than a plain screen (both ~0.2s) — well under
       the 5s budget.
 
-## 2. Item 3 — NSE bhavcopy migration (data layer v2)
+## 2. Item 3 — NSE bhavcopy migration (data layer v2) — build done 2026-07-05, clock started
 
 Deliberately after Item 2. Run side-by-side with yfinance; cut over only
 on evidence.
 
-- [ ] **`screener/bhavcopy.py`** — daily UDiFF bhavcopy download
-      (session headers, retry, holiday calendar), parse to the store
-      schema; EQ series filter. Acceptance: one day's file for all 500
-      symbols matches yfinance closes within rounding for unadjusted
-      names.
-- [ ] **Delivery % ingestion** — new store column + panel field
-      `delivery_pct`; NaN before migration date.
-- [ ] **Corporate-actions pipeline** — ingest NSE CA file; build
-      per-symbol adjustment factors (splits/bonuses only, documented:
-      dividends NOT adjusted — note the divergence from yfinance
-      convention in the design doc); apply on read. `verify --jumps`
-      is the regression harness: post-adjustment jump count must be ≤
-      the yfinance store's count.
-- [ ] **Cross-source consistency check in `verify`** — while both
-      sources run: daily close divergence report; investigate >0.5%
-      systematic gaps. Acceptance: 2 weeks of side-by-side with no
-      unexplained divergence before cutover.
+- [x] **`screener/bhavcopy.py`** — daily bhavcopy download (retry,
+      weekend/holiday-aware via 404-as-skip), parse to the store schema,
+      EQ series filter. Source turned out to be the single
+      `sec_bhavdata_full_DDMMYYYY.csv` file (OHLCV + delivery % together
+      — confirmed against a live fetch, not the originally-assumed
+      separate UDiFF zip + delivery file). Acceptance met: one real
+      day (2026-07-03) matched all 500 Nifty 500 yfinance closes to
+      ~1e-6% (floating-point noise only).
+- [x] **Delivery % ingestion** — `delivery_pct` column comes free from
+      `sec_bhavdata_full`; present in `data/bhavcopy_prices.parquet`.
+      Not yet threaded into the main indicator panels/DSL — deliberately
+      deferred with the `delivery` condition below (only after cutover).
+- [x] **Corporate-actions pipeline** — `fetch_corporate_actions()` (NSE's
+      `/api/corporates-corporateActions`, needs a cookie warm-up GET
+      first) + `parse_adjustment_factor()`, regexes built from real
+      fetched subject lines ("Bonus X:Y", "Face Value Split ... From
+      Rs.../ To Rs..."), dividends excluded by construction.
+      `build_adjustment_factors()`/`apply_adjustments()` compound
+      correctly backward in time (regression-tested — an oldest-first
+      application order was caught as a bug during implementation and
+      fixed before it shipped). CGCL's two 2024 actions (1:1 bonus ×
+      2→1 split = 0.25 combined factor) reproduce the real jump ratio
+      found in Item 0's jump-bar investigation almost exactly.
+- [x] **Cross-source consistency check in `verify`** — `verify.
+      check_cross_source`, folded into `python -m screener.cli verify`
+      automatically. First real week of side-by-side data (2026-06-25
+      → 2026-07-03): 45/3,000 overlapping bars over 0.5%, all in 11
+      symbols with a *constant* per-symbol gap — the signature of an
+      already-documented past dividend adjustment (§4a), not a new
+      problem. **2-week clock started 2026-07-05** — not code-gated,
+      calendar-gated; revisit for the actual cutover decision after.
 - [ ] **DSL: `delivery` condition** + vocabulary ("high delivery",
       "delivery spike") + preset ("accumulation: volume spike + delivery
       > 60%") — only after cutover.
 - [ ] **Cutover** — config flag flips primary source; yfinance demoted
-      to fallback; README/runbook updated.
+      to fallback; README/runbook updated. Blocked on the 2-week
+      evidence window above.
 - [ ] **Risk log** — NSE format changes are the known recurring hazard;
       keep parser tolerant and fail loud with the file snippet in the
-      error.
+      error. (The ingestion code already fails loud on fetch errors and
+      logs which day/symbol failed; a dedicated risk-log write-up is
+      still open.)
+- [ ] **Nightly cron** — `bhavcopy-update` is a manual command today;
+      add it alongside `update` in the cron job once side-by-side
+      collection should run unattended.
 
 ## 3. Parked — screen backtesting (unpark criteria, not tasks)
 

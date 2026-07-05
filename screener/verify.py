@@ -19,9 +19,58 @@ from . import config
 PASS, WARN, FAIL = "PASS", "WARN", "FAIL"
 
 
+def cross_source_divergence(yf_prices: pd.DataFrame,
+                            bhav_prices: pd.DataFrame) -> pd.DataFrame:
+    """Per (symbol, date) close-price divergence between the two data
+    sources, for dates present in both — the evidence Item 3's cutover
+    decision hinges on. Both closes should be on a comparable basis
+    (e.g. both raw/unadjusted, or bhavcopy already run through
+    `bhavcopy.apply_adjustments`) before calling this."""
+    y = yf_prices[["symbol", "date", "close"]].rename(
+        columns={"close": "yf_close"})
+    b = bhav_prices[["symbol", "date", "close"]].rename(
+        columns={"close": "bhav_close"})
+    m = y.merge(b, on=["symbol", "date"], how="inner")
+    m["pct_diff"] = 100 * (m["bhav_close"] / m["yf_close"] - 1).abs()
+    return m.sort_values("pct_diff", ascending=False).reset_index(drop=True)
+
+
+def check_cross_source(yf_prices: pd.DataFrame, bhav_prices: pd.DataFrame,
+                       threshold_pct: float = 0.5
+                       ) -> tuple[str, str, str]:
+    """One verify-report row summarising cross-source agreement so far.
+    WARN (not FAIL) on divergence — this is evidence-gathering during
+    the side-by-side period, not a live-store integrity gate; a
+    systematic >0.5% gap is a signal to investigate, not to refuse a
+    screen (bhavcopy isn't consumed by any screen yet)."""
+    if bhav_prices is None or bhav_prices.empty:
+        return ("cross-source (bhavcopy)", WARN,
+                "no bhavcopy data yet — run `python -m screener.cli "
+                "bhavcopy-update` to start the side-by-side clock")
+    div = cross_source_divergence(yf_prices, bhav_prices)
+    if div.empty:
+        return ("cross-source (bhavcopy)", WARN,
+                "no overlapping (symbol,date) rows yet between the two "
+                "stores")
+    bad = div[div["pct_diff"] > threshold_pct]
+    if bad.empty:
+        detail = (f"{len(div)} overlapping bars, median diff "
+                  f"{div['pct_diff'].median():.4f}%, max "
+                  f"{div['pct_diff'].max():.4f}% — all within "
+                  f"{threshold_pct}% tolerance")
+    else:
+        detail = (f"{len(div)} overlapping bars, median diff "
+                  f"{div['pct_diff'].median():.4f}%, {len(bad)} bar(s) "
+                  f"over {threshold_pct}% (e.g. "
+                  f"{', '.join(bad['symbol'].unique()[:5])}) — "
+                  "investigate before counting this toward cutover evidence")
+    return ("cross-source (bhavcopy)", PASS if bad.empty else WARN, detail)
+
+
 def verify_store(prices: pd.DataFrame, universe: pd.DataFrame,
                  benchmark: pd.Series | None,
-                 panels: dict[str, pd.DataFrame] | None = None
+                 panels: dict[str, pd.DataFrame] | None = None,
+                 bhav_prices: pd.DataFrame | None = None
                  ) -> list[tuple[str, str, str]]:
     """[(check_name, status, detail), ...]"""
     r: list[tuple[str, str, str]] = []
@@ -123,6 +172,9 @@ def verify_store(prices: pd.DataFrame, universe: pd.DataFrame,
                   PASS if ema_bad == 0 else WARN,
                   f"{ema_bad} symbols with mean |close/EMA50−1| >15% — "
                   "check for data gaps"))
+
+    # -- data layer v2 side-by-side evidence (Item 3, pre-cutover) ----
+    r.append(check_cross_source(prices, bhav_prices))
     return r
 
 

@@ -74,9 +74,25 @@ def cmd_verify(args) -> None:
                   "\n  python -m screener.cli refetch SYMBOL")
         return
     panels = indicators.build_panels(prices)
+    bhav_prices = (pd.read_parquet(config.BHAVCOPY_STORE)
+                  if config.BHAVCOPY_STORE.exists() else None)
     results = verify.verify_store(
-        prices, uni, data_ingest.load_benchmark(), panels)
+        prices, uni, data_ingest.load_benchmark(), panels, bhav_prices)
     _sys.exit(verify.print_report(results))
+
+
+def cmd_bhavcopy_update(_args) -> None:
+    """Fetch/append NSE bhavcopy days (data layer v2, side-by-side with
+    yfinance — see ROADMAP Item 3). Does not touch the live price store
+    that screens read from."""
+    from . import bhavcopy
+    store = bhavcopy.update_bhavcopy_store()
+    if store.empty:
+        print("No bhavcopy data yet.")
+        return
+    print(f"Bhavcopy store now covers {store['symbol'].nunique()} symbols, "
+          f"{len(store):,} rows, "
+          f"{store['date'].min().date()} → {store['date'].max().date()}")
 
 
 def cmd_refetch(args) -> None:
@@ -161,6 +177,10 @@ def main() -> None:
 
     sub.add_parser("backfill").set_defaults(func=cmd_backfill)
     sub.add_parser("update").set_defaults(func=cmd_update)
+    sub.add_parser("bhavcopy-update",
+                   help="fetch NSE bhavcopy days (data layer v2, "
+                        "side-by-side with yfinance — ROADMAP Item 3)"
+                   ).set_defaults(func=cmd_bhavcopy_update)
     vf = sub.add_parser("verify",
                         help="post-backfill data health report")
     vf.add_argument("--jumps", action="store_true",

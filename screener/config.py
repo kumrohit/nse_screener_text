@@ -7,6 +7,11 @@ DATA_DIR = ROOT / "data"
 PRICE_STORE = DATA_DIR / "prices.parquet"          # long format: symbol, date, ohlcv
 INDICATOR_STORE = DATA_DIR / "indicators.parquet"  # wide per-symbol latest snapshot
 UNIVERSE_FILE = DATA_DIR / "nifty500.csv"
+# Data layer v2 (ROADMAP Item 3) — runs side-by-side with the yfinance
+# store above; nothing reads from these yet. See TECHNICAL_DESIGN.md §4a.
+BHAVCOPY_STORE = DATA_DIR / "bhavcopy_prices.parquet"
+CORP_ACTIONS_STORE = DATA_DIR / "corporate_actions.parquet"
+DIVERGENCE_LOG = DATA_DIR / "bhavcopy_divergence.jsonl"
 
 # ---------------------------------------------------------------- data
 HISTORY_YEARS = 5
