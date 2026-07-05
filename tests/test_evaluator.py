@@ -407,3 +407,21 @@ class TestVerify:
         by = {n: s for n, s, _ in res}
         assert by["benchmark (Nifty)"] == verify.FAIL
         assert verify.print_report(res) == 1
+
+
+class TestJumpDiagnostics:
+    def test_split_like_flagged(self):
+        prices, uni, _ = _synth_store(n_sym=2, bars=400)
+        # engineer an unadjusted 1:2 split on SYM0 and a -45% crash on SYM1
+        i0 = prices[prices.symbol == "SYM0"].index[200]
+        c0 = prices.loc[i0 - 1, "close"] if False else None
+        mask0 = (prices.symbol == "SYM0") & (prices.index >= i0)
+        prices.loc[mask0, ["open", "high", "low", "close"]] *= 0.5
+        i1 = prices[prices.symbol == "SYM1"].index[300]
+        mask1 = (prices.symbol == "SYM1") & (prices.index >= i1)
+        prices.loc[mask1, ["open", "high", "low", "close"]] *= 0.55
+        j = verify.list_jumps(prices)
+        assert len(j) == 2
+        hints = dict(zip(j["symbol"], j["hint"]))
+        assert "UNADJUSTED" in hints["SYM0"]
+        assert "real event" in hints["SYM1"]

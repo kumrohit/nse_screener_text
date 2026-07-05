@@ -145,3 +145,29 @@ def print_report(results: list[tuple[str, str, str]]) -> int:
         print("Store looks healthy. Suggested next step: run the flagship "
               "query and eyeball 2-3 matches against a charting platform.")
     return 1 if fails else 0
+
+
+def list_jumps(prices: pd.DataFrame, threshold: float = 0.40
+               ) -> pd.DataFrame:
+    """The exact bars behind the adjustment smell test: one row per
+    single-day |move| > threshold, with context for classification."""
+    p = prices.sort_values(["symbol", "date"]).copy()
+    p["ret"] = p.groupby("symbol")["close"].pct_change()
+    j = p.loc[p["ret"].abs() > threshold,
+              ["symbol", "date", "close", "ret"]].copy()
+    if j.empty:
+        return j
+    prev = p.groupby("symbol")["close"].shift(1)
+    j["prev_close"] = prev.loc[j.index]
+    j["move_pct"] = (100 * j.pop("ret")).round(1)
+    # classification hint: a clean ratio near 1/2, 1/5, 1/10 smells like an
+    # unadjusted split/bonus; anything else is more likely a real event
+    ratio = j["close"] / j["prev_close"]
+    j["ratio"] = ratio.round(3)
+    j["hint"] = np.where(
+        (np.abs(ratio - 0.5) < 0.03) | (np.abs(ratio - 0.2) < 0.02)
+        | (np.abs(ratio - 0.1) < 0.01) | (np.abs(ratio - 0.25) < 0.02),
+        "split-like ratio — likely UNADJUSTED action",
+        "no clean ratio — likely real event (verify news)")
+    return j[["symbol", "date", "prev_close", "close", "move_pct",
+              "ratio", "hint"]].reset_index(drop=True)

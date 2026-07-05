@@ -149,6 +149,13 @@ Remember to activate the venv in every new terminal session.
 
 **`Price store stale` error** — run `python -m screener.cli update`.
 
+**`verify` warns about single-day moves >40%** — run
+`python -m screener.cli verify --jumps` to see the exact bars. Rows hinted
+"split-like ratio" are unadjusted corporate actions: fix with
+`python -m screener.cli refetch SYMBOL` (a fresh fetch usually comes back
+adjusted). Rows with no clean ratio are usually genuine events — verify
+against the news and leave them.
+
 **Backfill finished but far fewer than 500 symbols** — run
 `python -m screener.cli verify`; the coverage check names the missing
 symbols (usually NSE↔Yahoo ticker mismatches — see TECHNICAL_DESIGN.md §4).
