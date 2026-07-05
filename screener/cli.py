@@ -10,6 +10,20 @@ Usage (run locally, not in a sandbox — needs NSE/Yahoo network access):
 """
 from __future__ import annotations
 
+import sys
+
+if sys.version_info < (3, 10):  # must run before any third-party import
+    sys.exit(
+        f"This project needs Python 3.10+ (you are on "
+        f"{sys.version_info.major}.{sys.version_info.minor} at "
+        f"{sys.executable}).\n"
+        "On macOS this usually means the Command Line Tools Python was "
+        "picked up.\nFix:\n"
+        "    brew install python@3.12\n"
+        "    python3.12 -m venv .venv && source .venv/bin/activate\n"
+        "    pip install -r requirements.txt"
+    )
+
 import argparse
 import json
 import sys
@@ -40,6 +54,17 @@ def cmd_update(_args) -> None:
     prices = data_ingest.incremental_update(uni)
     data_ingest.fetch_benchmark()
     print(f"Store now ends {prices['date'].max().date()}")
+
+
+def cmd_verify(_args) -> None:
+    import sys as _sys
+    from . import verify
+    uni = universe.fetch_universe()
+    prices = _load_prices()
+    panels = indicators.build_panels(prices)
+    results = verify.verify_store(
+        prices, uni, data_ingest.load_benchmark(), panels)
+    _sys.exit(verify.print_report(results))
 
 
 def cmd_screen(args) -> None:
@@ -81,6 +106,9 @@ def main() -> None:
 
     sub.add_parser("backfill").set_defaults(func=cmd_backfill)
     sub.add_parser("update").set_defaults(func=cmd_update)
+    sub.add_parser("verify",
+                   help="post-backfill data health report"
+                   ).set_defaults(func=cmd_verify)
 
     sc = sub.add_parser("screen")
     sc.add_argument("query", help="natural-language filter or JSON spec")

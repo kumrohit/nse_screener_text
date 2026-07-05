@@ -115,7 +115,7 @@ Three layers. **Synthetic-series unit tests** (27 passing): constructed price pa
 
 ## 11. Operations runbook
 
-First run: `pip install -r requirements.txt`, set `ANTHROPIC_API_KEY`, `python -m screener.cli backfill` (10–15 min). Nightly: cron `python -m screener.cli update` after 18:30 IST. Quarterly: refresh the universe and re-backfill to pick up rebalances. Screens: `screen "<text>"`, `--dry-run` to inspect the compiled spec, `--json` to bypass the LLM, `--out file.csv` to export. Failure modes: stale-store error → run update; universe fetch fails → cached list used automatically, manual CSV drop-in as last resort; yfinance thin/missing data for a symbol → excluded by the 60-bar minimum, check the alias problem in §4; parser refusal → the query needs rephrasing within scope, or the concept belongs on the roadmap.
+First run: create a Python 3.10+ venv (`python3.12 -m venv .venv && source .venv/bin/activate` — both entry points guard against older interpreters and print this fix), `pip install -r requirements.txt`, set `ANTHROPIC_API_KEY`, `python -m screener.cli backfill` (10–15 min), then `python -m screener.cli verify` — an automated 11-check health report (coverage vs index list, freshness, depth, bar integrity, duplicates, corporate-action smell test via >40% single-day move counts, benchmark presence, RSI/EMA spot checks on a 25-symbol sample) that exits non-zero on FAIL for pipeline gating. Nightly: cron `python -m screener.cli update` after 18:30 IST. Quarterly: refresh the universe and re-backfill to pick up rebalances. Screens: `screen "<text>"`, `--dry-run` to inspect the compiled spec, `--json` to bypass the LLM, `--out file.csv` to export. Failure modes: stale-store error → run update; universe fetch fails → cached list used automatically, manual CSV drop-in as last resort; yfinance thin/missing data for a symbol → excluded by the 60-bar minimum, check the alias problem in §4; parser refusal → the query needs rephrasing within scope, or the concept belongs on the roadmap.
 
 
 ## 12. Web UI and evidence layer
@@ -133,5 +133,6 @@ Phase 3 (next): screen backtesting — for any DSL spec, compute historical hit 
 ## 14. Changelog
 
 0.1 — Data layer (Nifty 500, yfinance 5y, Parquet), daily indicator engine, 8-condition DSL with validation and English echo, LLM parser with canonical vocabulary, CLI, 16 synthetic tests.
+0.3.1 — `verify` command automating the §10 checklist (verify.py, 3 tests), Python≥3.10 guards on entry points, README first-run checklist and troubleshooting. 36 tests.
 0.3 — Web UI: FastAPI backend + single-page evidence-trail frontend, explain.py observability layer, near-miss reporting, synthetic demo mode, 33 tests.
 0.2 — Swing-pivot S/R (`near_support`, `near_resistance`, `breakout_resistance`), weekly timeframe on 5 condition types, `rel_strength` vs Nifty with benchmark ingestion, golden-query suite (12 fixtures, offline + live harness), 27 tests total, this document.

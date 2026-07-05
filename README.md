@@ -50,6 +50,21 @@ Keep it fresh with a nightly job (after 18:30 IST, once NSE close data settles):
 python -m screener.cli update
 ```
 
+## First live run (checklist)
+
+```bash
+python3.12 -m venv .venv && source .venv/bin/activate   # once
+pip install -r requirements.txt
+python -m screener.cli backfill     # ~10-15 min
+python -m screener.cli verify       # automated data health report
+python -m screener.webapp           # then open http://127.0.0.1:8501
+```
+
+`verify` runs 11 checks — symbol coverage vs the index list, freshness,
+history depth, bar integrity, duplicates, a corporate-action "smell test",
+benchmark presence, and indicator spot checks — and exits non-zero on any
+FAIL so it can gate a cron pipeline (`... update && ... verify && ...`).
+
 ## Web UI
 
 ```bash
@@ -122,6 +137,21 @@ CI runs the offline suite on every push. The live harness gates any change to th
 ## Roadmap
 
 Screen backtesting (forward-return distributions for any filter), candlestick/consolidation patterns, sector relative strength, NSE bhavcopy ingestion with delivery %, web UI. Details in the design doc.
+
+## Troubleshooting
+
+**`ModuleNotFoundError: No module named 'fastapi'` or a traceback showing Python 3.9**
+You're running macOS's Command Line Tools Python; this project needs 3.10+
+(the entry points now detect this and print the fix). Create a venv with a
+modern interpreter: `brew install python@3.12`, then
+`python3.12 -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt`.
+Remember to activate the venv in every new terminal session.
+
+**`Price store stale` error** — run `python -m screener.cli update`.
+
+**Backfill finished but far fewer than 500 symbols** — run
+`python -m screener.cli verify`; the coverage check names the missing
+symbols (usually NSE↔Yahoo ticker mismatches — see TECHNICAL_DESIGN.md §4).
 
 ## Disclaimer
 

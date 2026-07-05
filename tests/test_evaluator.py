@@ -354,3 +354,56 @@ class TestWebAPI:
         assert j["stats"]["near_misses"] >= 1
         nm = j["near_misses"][0]
         assert nm["conditions_passed"] == 1
+
+
+# ---------------------------------------------------------------- verify
+from screener import verify  # noqa: E402
+
+
+def _synth_store(n_sym=10, bars=1300, inject_bad=False):
+    frames = []
+    for k in range(n_sym):
+        closes = 100 * np.cumprod(1 + RNG.normal(0.0005, 0.01, bars))
+        dates = pd.bdate_range(end=pd.Timestamp.today().normalize()
+                               - pd.offsets.BDay(1), periods=bars)
+        frames.append(pd.DataFrame({
+            "date": dates, "symbol": f"SYM{k}",
+            "open": closes, "high": closes * 1.01, "low": closes * 0.99,
+            "close": closes, "volume": 1e6}))
+    prices = pd.concat(frames, ignore_index=True)
+    if inject_bad:
+        prices.loc[5, "high"] = -1              # impossible bar
+        prices = pd.concat([prices, prices.iloc[[10]]])  # duplicate
+    uni = pd.DataFrame({"symbol": [f"SYM{k}" for k in range(n_sym + 1)],
+                        "name": "x", "industry": "y"})  # 1 missing symbol
+    bench = pd.Series(100 * np.cumprod(1 + np.full(bars, 0.0004)),
+                      index=pd.bdate_range(
+                          end=pd.Timestamp.today().normalize()
+                          - pd.offsets.BDay(1), periods=bars))
+    return prices, uni, bench
+
+
+class TestVerify:
+    def test_healthy_store_passes(self):
+        prices, uni, bench = _synth_store()
+        from screener.indicators import build_panels
+        res = verify.verify_store(prices, uni, bench, build_panels(prices))
+        fails = [n for n, s, _ in res if s == verify.FAIL]
+        assert not fails, fails
+        # 1 of 11 symbols missing -> coverage should be WARN not FAIL
+        cov = next(x for x in res if x[0] == "symbol coverage")
+        assert cov[1] == verify.WARN
+
+    def test_bad_store_fails(self):
+        prices, uni, bench = _synth_store(inject_bad=True)
+        res = verify.verify_store(prices, uni, bench)
+        by = {n: s for n, s, _ in res}
+        assert by["bar integrity"] == verify.FAIL
+        assert by["duplicate bars"] == verify.FAIL
+
+    def test_missing_benchmark_fails(self):
+        prices, uni, _ = _synth_store(n_sym=3, bars=600)
+        res = verify.verify_store(prices, uni, None)
+        by = {n: s for n, s, _ in res}
+        assert by["benchmark (Nifty)"] == verify.FAIL
+        assert verify.print_report(res) == 1
