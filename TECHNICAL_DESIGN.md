@@ -1,6 +1,6 @@
 # NSE Text Screener — Technical Design Document
 
-Version 0.3 · July 2026 · Status: Phase 2 + web UI complete, tested on synthetic data, pending first live run
+Version 0.5 · July 2026 · Status: live data verified (500/500 coverage); patterns, presets, as-of replay, sparklines, screen log shipped
 
 ---
 
@@ -64,7 +64,7 @@ Trend is defined canonically, not left to interpretation. Daily uptrend: close >
 
 ## 6. Filter DSL
 
-A screen is `{"logic": "AND"|"OR", "conditions": [...], "as_of": "latest"|ISO-date}`. Validation is strict: unknown condition types, unknown fields, bad operators, and weekly-timeframe use of daily-only fields all raise `DSLValidationError` before any data is touched. Twelve condition types:
+A screen is `{"logic": "AND"|"OR", "conditions": [...], "as_of": "latest"|ISO-date}`. Validation is strict: unknown condition types, unknown fields, bad operators, and weekly-timeframe use of daily-only fields all raise `DSLValidationError` before any data is touched. Sixteen condition types:
 
 | Type | Keys (defaults) | Semantics |
 |---|---|---|
@@ -80,6 +80,10 @@ A screen is `{"logic": "AND"|"OR", "conditions": [...], "as_of": "latest"|ISO-da
 | `near_resistance` | tolerance_pct | Close within tol below nearest swing resistance. |
 | `breakout_resistance` | lookback (5), buffer_pct (0) | See §8. |
 | `rel_strength` | window, op, value_pct | Stock return − Nifty return over window, in pct points. |
+| `candle` | pattern, lookback (1) | One of 6 exact candlestick formulas (§9a) within the window. |
+| `tight_range` | max_range_pct, bars (10) | N-bar high-low span as % of the window low. |
+| `bb_squeeze` | percentile (20), lookback (252) | Bollinger bandwidth vs its own trailing distribution. |
+| `flat_base` | bars (20), max_range_pct (12), max_from_52w_high_pct (15) | Tight range near the 52-week high (§9a). |
 
 `compare`, `range`, `trend`, `change`, and `cross` accept `"timeframe": "weekly"`, which routes evaluation to the weekly panel with its restricted field set.
 
@@ -128,17 +132,22 @@ First run: create a Python 3.10+ venv (`python3.12 -m venv .venv && source .venv
 
 `python -m screener.webapp` serves a single-page interface (FastAPI backend, dependency-free vanilla-JS frontend in `web/index.html`, port 8501) built around full auditability of every screen. The page always shows, together: the original query, the plain-English compiled interpretation, the raw JSON spec (collapsible), the data as-of date and mode, and funnel statistics (universe → liquidity-excluded → evaluated → matched).
 
-The core of the UI is the **evidence trail**, powered by `explain.py`. For every condition on every displayed stock it reports pass/fail plus the observed values behind the decision — e.g. for `support_at_ma`: the date the low touched the MA and the touch distance, the worst close-vs-MA excursion across the window, and the latest close's margin above the MA. Pass/fail is delegated to the same `evaluator.cond_*` functions used by the screen itself, so the explanation can never disagree with the result; `explain.py` only adds observability. A **near-miss** section lists stocks failing exactly one condition with the failing condition marked ✗ — the most useful feedback for tuning tolerances.
+**Screen definition** offers three routes: plain-English (LLM parse with mandatory interpretation echo), raw JSON spec, and a grouped **preset dropdown** backed by `presets.py` (§9a) via `GET /api/presets`, which shows each preset's rationale and compiled English before running. An **as-of date picker** replays any historical date; when set, condition evaluation, match metrics, and sparkline windows are all computed at that row (never the latest bar), preserving the reproducibility guarantee for historical screens. Note the survivorship caveat from §4 applies to any historical replay.
 
-Endpoints: `GET /api/status`, `POST /api/parse` (text → spec via the LLM; returns a structured error without an API key), `POST /api/screen` (spec → matches + near-misses + methodology block). Specs can bypass the parser entirely via the JSON tab. When `data/prices.parquet` is absent the backend boots a labelled synthetic 8-stock demo universe (`demo.py`) with engineered behaviours (EMA pullback, breakdown, range-bound at support, resistance breakout, oversold, golden cross), so the UI, API, and evidence layer are fully testable — in CI and by a fresh clone — without market data.
+The core of the UI is the **evidence trail**, powered by `explain.py`. For every condition on every displayed stock it reports pass/fail plus the observed values behind the decision — e.g. for `support_at_ma`: the date the low touched the MA and the touch distance, the worst close-vs-MA excursion across the window, and the latest close's margin above the MA. Pass/fail is delegated to the same `evaluator.cond_*` functions used by the screen itself, so the explanation can never disagree with the result; `explain.py` only adds observability. Each match card also renders an **evidence sparkline**: an inline SVG of the last 60 bars (up to the as-of row) overlaying exactly the series the spec referenced (EMAs, bands, 52-week levels) and every horizontal level the evidence produced (swing support/resistance, breakout levels) — so verifying a touch or a level does not require leaving the page. A **near-miss** section lists stocks failing exactly one condition with the failing condition marked ✗ — the most useful feedback for tuning tolerances.
+
+Every run is appended to `data/screen_log.jsonl` — timestamp, as-of date, full spec, funnel stats, matched symbols — turning the deterministic-replay guarantee into a browsable history (`GET /api/log`, or `python -m screener.cli log`). Log writes never raise; a failed write cannot break a screen.
+
+Endpoints: `GET /api/status`, `GET /api/presets`, `GET /api/log`, `POST /api/parse` (text → spec via the LLM; structured error without an API key), `POST /api/screen` (spec → matches + near-misses + sparklines + methodology block). When `data/prices.parquet` is absent the backend boots a labelled synthetic 8-stock demo universe (`demo.py`) with engineered behaviours, so the UI, API, and evidence layer are fully testable — in CI and by a fresh clone — without market data.
 
 ## 13. Roadmap
 
-Phase 3 (next): screen backtesting — for any DSL spec, compute historical hit dates per symbol and forward return distributions (5/20/60 bars) vs universe baseline, turning the screener into an edge-validation tool; reuse the existing as-of machinery (already built for this) and the Indian transaction-cost model from the momentum backtester. Then: candlestick and consolidation patterns (inside bars, NR7, flat bases) as DSL conditions; sector/industry relative strength using the universe's industry column; nested boolean logic if real queries demand it; delivery-percentage data (requires the bhavcopy migration — yfinance doesn't carry it); optional React front-end reusing the terminal-style screener UI.
+Completed from the Phase 3 plan: pattern/consolidation conditions with the preset library (item 1) and the workflow layer — as-of replay, evidence sparklines, screen log (item 4). Remaining, in order: **(2) sector and relative-strength extensions** — industry as a filter, equal-weight sector aggregates for "top-3 sector" conditions, and per-stock RS percentile vs the universe; this requires a cross-sectional pre-pass computing universe-wide ranks per date (cached like the benchmark), the one structural change to the per-symbol evaluator, and groundwork the backtester will reuse. **(3) NSE bhavcopy migration** — official OHLCV, delivery percentage as a screenable field, and our own corporate-action adjustment pipeline, run side-by-side with yfinance behind a `verify` cross-source consistency check before cutover; deliberately last so a working data layer isn't destabilised while features are added above it. **Parked**: screen backtesting (event-study on any spec: historical signal dates, de-duplicated forward-return distributions at 5/20/60 bars vs universe baseline, tolerance sensitivity grids; the as-of machinery it needs is already in place) — revisit after items 2–3. **Deferred indefinitely**: nested boolean logic (until a real query demands it), monthly timeframe (weekly machinery generalises trivially), intraday (out of scope by design).
 
 ## 14. Changelog
 
 0.1 — Data layer (Nifty 500, yfinance 5y, Parquet), daily indicator engine, 8-condition DSL with validation and English echo, LLM parser with canonical vocabulary, CLI, 16 synthetic tests.
+0.5 — As-of date picker with as-of-correct metrics and spark windows, evidence sparklines (spec-referenced series + evidence levels on a 60-bar inline chart), append-only screen log (JSONL + /api/log + CLI `log`). 50 tests.
 0.4 — Pattern conditions (candle: inside_bar/nr7/engulfing×2/hammer/shooting_star; tight_range, bb_squeeze, flat_base) with exact documented formulas, explainers, parser vocabulary; 14-screen preset library with grouped web-UI dropdown, /api/presets, CLI presets/--preset; 2 new golden fixtures. 47 tests.
 0.3.2 — `verify --jumps` diagnostic (lists smell-test bars with split-ratio classification hints) and `refetch SYMBOL` remedy command. 37 tests.
 0.3.1 — `verify` command automating the §10 checklist (verify.py, 3 tests), Python≥3.10 guards on entry points, README first-run checklist and troubleshooting. 36 tests.

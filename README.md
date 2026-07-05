@@ -71,14 +71,32 @@ FAIL so it can gate a cron pipeline (`... update && ... verify && ...`).
 python -m screener.webapp        # http://127.0.0.1:8501
 ```
 
-A **preset dropdown** offers 14 curated screens grouped by intent (trend continuation, breakouts, reversals, relative strength, bearish) — pick one to load its spec, see its plain-English compilation, and run it, no API key needed. Or type a screen in plain English, hit **Interpret query** to see exactly how it
-was understood (plain English + the compiled JSON spec), then **Run screen**.
-Every match expands into an **evidence trail**: each condition with a ✓/✗ and
-the observed values behind it — which bar touched the EMA and how close, the
-actual RSI, the cross date, the stock-vs-Nifty return gap. A **near-misses**
-section shows stocks that failed exactly one condition, so you can see the
-boundary of your filter. With no price store yet, it boots into a labelled
-8-stock demo universe; preset chips run without an API key.
+Three ways to define a screen: type it in **plain English** and hit
+**Interpret query** to see exactly how it was understood (plain English +
+the compiled JSON spec) before running; paste a raw **JSON spec**; or pick
+from the **preset dropdown** — 14 curated screens grouped by intent (trend
+continuation, breakouts, reversals, relative strength, bearish), each shown
+with its rationale and compiled English, no API key needed.
+
+An **as-of date picker** replays any historical date — evaluation, metrics,
+and charts all reflect that date, so you can see exactly what a screen
+would have shown last month (current-constituent universe, so historical
+replays carry survivorship bias — see the design doc).
+
+Every match expands into an **evidence trail**: each condition with a ✓/✗
+and the observed values behind it — which bar touched the EMA and how
+close, the pattern date and its OHLC, the cross date, the stock-vs-Nifty
+return gap — plus an **evidence sparkline**: a 60-bar mini-chart overlaying
+exactly the series the spec referenced and the support/resistance levels
+the evidence found, so verifying a setup doesn't require switching to your
+charting platform. A **near-misses** section shows stocks that failed
+exactly one condition, so you can see the boundary of your filter.
+
+Every run is logged to `data/screen_log.jsonl` (spec + as-of date + matches
+— the full replay trail); browse it with `python -m screener.cli log`.
+
+With no price store yet, the app boots into a labelled 8-stock demo
+universe so everything above is explorable immediately after clone.
 
 ## CLI usage
 
@@ -96,6 +114,7 @@ python -m screener.cli screen --dry-run "strong trend stocks pulling back to the
 python -m screener.cli presets                  # list pre-configured screens
 python -m screener.cli screen --preset flat_base_52w
 python -m screener.cli screen --out hits.csv "near support with huge volume"
+python -m screener.cli log                      # recent runs (replay trail)
 
 # power users: raw spec, no LLM, no API key
 python -m screener.cli screen --json '{"logic":"AND","conditions":[

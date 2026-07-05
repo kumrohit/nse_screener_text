@@ -41,6 +41,12 @@
   button:focus-visible{outline:2px solid var(--pass);outline-offset:2px}
   select{background:var(--bg);border:1px solid var(--line);border-radius:4px;color:var(--text);font-family:var(--sans);font-size:12.5px;padding:7px 10px;min-width:280px;max-width:100%}
   select:focus{outline:2px solid var(--amber-dim)}
+  .asof{font-family:var(--sans);font-size:12px;color:var(--muted);display:flex;align-items:center;gap:6px}
+  .asof input{background:var(--bg);border:1px solid var(--line);border-radius:4px;color:var(--text);font-family:var(--mono);font-size:12.5px;padding:6px 8px;color-scheme:dark}
+  .spark{margin-top:14px;background:var(--panel2);border:1px solid var(--line);border-radius:4px;padding:8px 10px 4px}
+  .spark svg{display:block;width:100%;height:120px}
+  .sleg{font-family:var(--sans);font-size:10.5px;color:var(--muted);letter-spacing:.05em;margin-top:2px}
+  .sleg span{margin-right:12px}
   .pdesc{font-family:var(--sans);font-size:12px;color:var(--muted);margin-top:8px;display:none;border-left:2px solid var(--line);padding-left:10px}
 
   /* interpretation */
@@ -112,6 +118,7 @@
     <div class="row">
       <button class="primary" id="btnInterpret" onclick="interpret()">Interpret query</button>
       <button id="btnRun" onclick="run()" disabled>Run screen</button>
+      <label class="asof">as of <input type="date" id="asOf" title="screen a historical date (blank = latest bar)"></label>
       <span class="spin" id="spin">▮▮▮</span>
     </div>
     <div class="row" style="margin-top:14px">
@@ -219,11 +226,36 @@ async function run(){
     try{s=JSON.parse($("qJs").value)}catch(e){err("Spec is not valid JSON: "+e.message);return}
   }
   if(!s){err("Interpret the query first.");return}
+  const d = $("asOf").value;
+  s = {...s, as_of: d || "latest"};
   busy(true);
   try{ render(await api("/api/screen",{spec:s})) }catch(e){err(e.message)}
   busy(false);
 }
 
+const SCOL=["#5B9BD5","#B07CC6","#6FBF9F","#D5A15B"]; // overlay palette
+function spark(m){
+  const s=m.spark; if(!s||!s.close||s.close.length<2) return "";
+  const W=680,H=110,P=6;
+  let vals=[...s.low,...s.high];
+  Object.values(s.series).forEach(a=>vals=vals.concat(a.filter(v=>v!==null)));
+  Object.values(s.levels).forEach(v=>vals.push(v));
+  vals=vals.filter(v=>v!==null&&isFinite(v));
+  const mn=Math.min(...vals),mx=Math.max(...vals),sp=(mx-mn)||1;
+  const X=i=>P+(W-2*P)*i/(s.close.length-1);
+  const Y=v=>H-P-(H-2*P)*(v-mn)/sp;
+  const path=a=>a.map((v,i)=>v===null?"":`${i&&a[i-1]!==null?"L":"M"}${X(i).toFixed(1)},${Y(v).toFixed(1)}`).join("");
+  let svg=`<path d="${path(s.close)}" fill="none" stroke="var(--amber)" stroke-width="1.6"/>`;
+  let leg=`<span style="color:var(--amber)">— close</span>`;
+  Object.entries(s.series).forEach(([k,a],n)=>{
+    svg+=`<path d="${path(a)}" fill="none" stroke="${SCOL[n%4]}" stroke-width="1.1" opacity=".9"/>`;
+    leg+=`<span style="color:${SCOL[n%4]}">— ${k.replace("_"," ").toUpperCase()}</span>`;});
+  Object.entries(s.levels).forEach(([k,v])=>{
+    svg+=`<line x1="${P}" x2="${W-P}" y1="${Y(v).toFixed(1)}" y2="${Y(v).toFixed(1)}" stroke="var(--muted)" stroke-dasharray="4 4" stroke-width="1"/>`;
+    leg+=`<span>┄ ${k} ${v}</span>`;});
+  return `<div class="spark"><svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img" aria-label="price chart">${svg}</svg>
+    <div class="sleg">${leg}<span style="float:right">${s.dates[0]} → ${s.dates[s.dates.length-1]}</span></div></div>`;
+}
 const fmt=(v,suf="")=>v===null||v===undefined?"—":v+suf;
 const signed=v=>v===null||v===undefined?"—":
   `<span class="${v>=0?"pos":"neg"}">${v>0?"+":""}${v}%</span>`;
@@ -253,6 +285,7 @@ function render(r){
         <span class="mini"><b class="${miss?"neg":"pos"}">${m.conditions_passed}/${m.conditions_total}</b> conditions</span>
       </div>
       <div class="mbody">
+        ${spark(m)}
         <div class="eyebrow">Evidence — why this ${miss?"almost matched":"matched"}</div>
         <div class="ledger">
           ${m.evidence.map(e=>`

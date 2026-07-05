@@ -2,6 +2,7 @@
 data/*.parquet
 !data/.gitkeep
 data/*.csv
+data/*.jsonl
 
 # python
 __pycache__/

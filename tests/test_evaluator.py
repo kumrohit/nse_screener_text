@@ -528,3 +528,48 @@ class TestPresets:
         ev = explain.explain_symbol(p, dsl.validate({"conditions": [
             {"type": "candle", "pattern": "inside_bar"}]}))
         assert ev[0]["passed"] and "inside_bar on" in ev[0]["evidence"]
+
+
+class TestAsOfAndSpark:
+    client = TestClient(app)
+
+    def test_historical_as_of_metrics(self):
+        # metrics must come from the as-of row, not the latest bar
+        from screener.webapp import _load_state
+        st = _load_state()
+        panel = st["panels"]["STEADY"]
+        d = str(panel.index[-40].date())
+        spec = {"logic": "AND", "as_of": d, "conditions": [
+            {"type": "trend", "direction": "up"}]}
+        j = self.client.post("/api/screen", json={"spec": spec}).json()
+        assert j["as_of"] == d
+        m = next(x for x in j["matches"] if x["symbol"] == "STEADY")
+        expected = round(float(panel["close"].iloc[-40]), 2)
+        assert m["metrics"]["close"] == expected
+        assert m["spark"]["dates"][-1] == d
+
+    def test_spark_contains_referenced_series_and_levels(self):
+        j = self.client.post("/api/screen", json={"spec": {
+            "logic": "AND", "conditions": [
+                {"type": "support_at_ma", "ma": "ema_50",
+                 "tolerance_pct": 1.5, "lookback": 3},
+                {"type": "trend", "direction": "up"}]}}).json()
+        sp = j["matches"][0]["spark"]
+        assert "ema_50" in sp["series"]
+        assert len(sp["close"]) == len(sp["dates"]) <= 60
+        j2 = self.client.post("/api/screen", json={"spec": {
+            "conditions": [{"type": "near_support",
+                            "tolerance_pct": 2.5}]}}).json()
+        assert any("support" in m["spark"]["levels"]
+                   for m in j2["matches"])
+
+    def test_screen_log_written(self):
+        from screener import webapp
+        before = (webapp.LOG_FILE.read_text().count("\n")
+                  if webapp.LOG_FILE.exists() else 0)
+        self.client.post("/api/screen", json={"spec": {
+            "conditions": [{"type": "trend", "direction": "up"}]}})
+        after = webapp.LOG_FILE.read_text().count("\n")
+        assert after == before + 1
+        r = self.client.get("/api/log")
+        assert r.status_code == 200 and r.json()[0]["matched"]

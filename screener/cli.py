@@ -102,6 +102,22 @@ def cmd_presets(_args) -> None:
         print(f"{'':28} {_dsl.describe(p['spec'])}\n")
 
 
+def cmd_log(args) -> None:
+    import json as _json
+    from .webapp import LOG_FILE
+    if not LOG_FILE.exists():
+        print("No screens logged yet.")
+        return
+    lines = LOG_FILE.read_text().strip().splitlines()[-args.tail:]
+    for ln in reversed(lines):
+        e = _json.loads(ln)
+        print(f"{e['ts']}  as_of={e['as_of']}  "
+              f"matched {e['stats']['matched']}/{e['stats']['evaluated']}: "
+              f"{', '.join(e['matched'][:10])}"
+              + (" …" if len(e['matched']) > 10 else ""))
+        print(f"    {dsl.describe(e['spec'])}")
+
+
 def cmd_screen(args) -> None:
     if getattr(args, "preset", None):
         from . import presets
@@ -151,6 +167,10 @@ def main() -> None:
                     help="list the exact bars behind the adjustment "
                          "smell test, with split-ratio hints")
     vf.set_defaults(func=cmd_verify)
+
+    lg = sub.add_parser("log", help="recent screen runs (replay trail)")
+    lg.add_argument("--tail", type=int, default=10)
+    lg.set_defaults(func=cmd_log)
 
     rf = sub.add_parser("refetch",
                         help="drop and re-download one symbol")
