@@ -204,7 +204,72 @@ done AND at least one screen has earned enough trust in live use that
       outside this scope rather than approximate it"). Revisit only if
       that scope decision itself is revisited.
 
-## 5. Recurring operations (not one-time)
+## 5. UI depth (v0.7 track) — make it a daily-driver
+
+Ordered by daily-use value, not effort.
+
+- [ ] **Screen diff ("what changed since last run")** — for any spec run,
+      look up the previous run of the *same spec* (hash the canonical
+      spec; screen log already stores everything needed) and badge
+      results: NEW entrants, plus a collapsed "dropped since last run"
+      list with the condition that now fails (reuse explain on the
+      dropouts). Acceptance: run preset → update data → rerun → diff
+      correct; hash stable under key order/default fill.
+- [ ] **Full chart modal** — click a sparkline → large modal chart:
+      candlesticks (patterns need candles, not a close line), volume
+      subpane, all spec-referenced overlays + evidence levels, ~250 bars,
+      drag-to-zoom. Zero external libs (offline constraint stands);
+      hand-rolled SVG. Acceptance: driven via Playwright like v0.6.2.
+- [ ] **Watchlist with signal-decay tracking** — star a match →
+      data/watchlist.jsonl (symbol, date, spec hash, close at tag).
+      Watchlist view: % move since tag, and whether the original
+      conditions still hold today (re-evaluate spec). Acceptance:
+      tag → advance as-of → status updates correctly.
+- [ ] **Saved custom screens** — persist user-authored specs
+      (data/user_presets.json) with name/notes; appear in the dropdown
+      under "My screens"; save-from-current-spec button; delete/rename.
+      Validation identical to built-ins (reject on save, not on run).
+- [ ] **Multi-screen dashboard** — run N selected presets in one call
+      (`POST /api/screen_batch`); compact grid: preset × (match count,
+      top-3 symbols, new-since-last-run count). The morning view.
+- [ ] **Results table ergonomics** — client-side column sort, sector
+      filter chips built from the result set, sticky header. No pagination
+      (cap already exists).
+
+## 6. Robustness hardening (v0.7 track)
+
+- [ ] **P0 — stale-server fix**: webapp loads panels once at startup;
+      after nightly `update`, a long-running server screens yesterday's
+      data. Fix: record store mtime in `_load_state`; on each /api/screen
+      and /api/status, if mtime changed → rebuild state (under the
+      existing lock) and clear cross-section cache. Acceptance test:
+      monkeypatched store swap mid-session changes as_of without restart.
+- [ ] **Data-quality badges on matches** — per-symbol flags surfaced in
+      results, not buried in verify: recent >40% jump within the spark
+      window (adjustment/demerger risk — "levels may straddle a gap"),
+      thin history (<250 bars), symbol-stale (last bar < store's latest,
+      e.g. suspended names). Backend adds `flags: []` per match; UI shows
+      a small ⚠ with reason. Acceptance: demo symbol engineered per flag.
+- [ ] **User config overrides** — optional data/config_local.toml
+      overriding tunables (tolerances, liquidity gate, SR params, spark
+      bars) without code edits; effective config hash logged with every
+      screen-log entry and shown in the methodology footer (a screen is
+      only reproducible if its config is part of the record).
+- [ ] **Parser resilience** — one retry on malformed JSON; failed parses
+      appended to data/parse_failures.jsonl (query + raw output) as the
+      vocabulary-improvement backlog; /api/parse returns the canonical
+      "assumptions" list when the LLM filled a default so the UI can
+      render "interpreted with defaults: …".
+- [ ] **`/api/health`** — cheap JSON for cron/uptime monitoring: store
+      mtime + as-of, panel count, benchmark present, log writable,
+      version (git describe). Nightly pipeline curls it after update.
+- [ ] **Screen-log rotation** — size-capped rotation (keep last ~5k
+      runs); verify's integrity check learns about rotated files.
+- [ ] **Golden harness in CI (manual)** — workflow_dispatch job using an
+      ANTHROPIC_API_KEY repo secret, so parser-prompt PRs can be gated
+      without a local run.
+
+## 7. Recurring operations (not one-time)
 
 - [ ] Nightly: `update && verify` (cron after 18:30 IST) — set up once,
       then recurring.
@@ -216,7 +281,7 @@ done AND at least one screen has earned enough trust in live use that
 - [ ] After every feature: README + TECHNICAL_DESIGN + this checklist
       updated in the same commit.
 
-## 6. Deferred (decision recorded, revisit only on demand)
+## 8. Deferred (decision recorded, revisit only on demand)
 
 - Nested boolean logic (AND-of-ORs) — parser reliability + evidence
   readability cost; waits for a real query that needs it.
