@@ -16,20 +16,6 @@ so the UI is explorable immediately after clone.
 """
 from __future__ import annotations
 
-import sys
-
-if sys.version_info < (3, 10):  # must run before any third-party import
-    sys.exit(
-        f"This project needs Python 3.10+ (you are on "
-        f"{sys.version_info.major}.{sys.version_info.minor} at "
-        f"{sys.executable}).\n"
-        "On macOS this usually means the Command Line Tools Python was "
-        "picked up.\nFix:\n"
-        "    brew install python@3.12\n"
-        "    python3.12 -m venv .venv && source .venv/bin/activate\n"
-        "    pip install -r requirements.txt"
-    )
-
 import threading
 
 import pandas as pd

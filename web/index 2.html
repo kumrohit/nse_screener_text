@@ -1,0 +1,283 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NSE Text Screener</title>
+<style>
+  :root{
+    --bg:#0B1017; --panel:#111826; --panel2:#0E1420; --line:#1E2836;
+    --text:#D7DEE8; --muted:#7C8798; --amber:#E8A33D; --amber-dim:#8A6524;
+    --pass:#3FBF9F; --fail:#E06060; --mono:"IBM Plex Mono","JetBrains Mono",ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+    --sans:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  }
+  *{box-sizing:border-box;margin:0}
+  body{background:var(--bg);color:var(--text);font-family:var(--mono);font-size:14px;line-height:1.55}
+  .wrap{max-width:1060px;margin:0 auto;padding:28px 20px 80px}
+
+  /* header */
+  header{display:flex;justify-content:space-between;align-items:baseline;border-bottom:1px solid var(--line);padding-bottom:14px;margin-bottom:26px;flex-wrap:wrap;gap:8px}
+  h1{font-size:17px;font-weight:600;letter-spacing:.04em}
+  h1 .tick{color:var(--amber)}
+  .status{font-family:var(--sans);font-size:11.5px;color:var(--muted);letter-spacing:.06em;text-transform:uppercase}
+  .status b{color:var(--text);font-weight:600}
+  .badge{display:inline-block;padding:1px 8px;border:1px solid var(--amber-dim);color:var(--amber);border-radius:3px;margin-left:8px}
+
+  /* eyebrow labels */
+  .eyebrow{font-family:var(--sans);font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);margin-bottom:8px}
+
+  /* query area */
+  .tabs{display:flex;gap:0;margin-bottom:-1px}
+  .tab{font-family:var(--sans);font-size:12px;letter-spacing:.05em;padding:7px 16px;border:1px solid var(--line);border-bottom:none;background:var(--panel2);color:var(--muted);cursor:pointer;border-radius:4px 4px 0 0}
+  .tab.active{background:var(--panel);color:var(--text);border-color:var(--line)}
+  .qbox{background:var(--panel);border:1px solid var(--line);border-radius:0 4px 4px 4px;padding:16px}
+  textarea{width:100%;background:var(--bg);border:1px solid var(--line);border-radius:4px;color:var(--text);font-family:var(--mono);font-size:14px;padding:12px;resize:vertical;min-height:64px}
+  textarea:focus{outline:2px solid var(--amber-dim);outline-offset:1px}
+  .row{display:flex;gap:10px;margin-top:12px;align-items:center;flex-wrap:wrap}
+  button{font-family:var(--sans);font-size:13px;font-weight:600;letter-spacing:.03em;padding:9px 20px;border-radius:4px;border:1px solid var(--amber-dim);background:transparent;color:var(--amber);cursor:pointer}
+  button.primary{background:var(--amber);color:#161006;border-color:var(--amber)}
+  button:hover{filter:brightness(1.12)}
+  button:disabled{opacity:.4;cursor:default}
+  button:focus-visible{outline:2px solid var(--pass);outline-offset:2px}
+  .chips{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px}
+  .chip{font-family:var(--sans);font-size:11.5px;padding:4px 11px;border:1px solid var(--line);border-radius:12px;color:var(--muted);cursor:pointer;background:none}
+  .chip:hover{color:var(--amber);border-color:var(--amber-dim)}
+
+  /* interpretation */
+  .interp{margin-top:22px;background:var(--panel);border:1px solid var(--line);border-left:3px solid var(--amber);border-radius:4px;padding:16px 18px;display:none}
+  .interp .english{font-size:14.5px}
+  details{margin-top:10px}
+  summary{font-family:var(--sans);font-size:11.5px;color:var(--muted);cursor:pointer;letter-spacing:.05em}
+  pre{background:var(--bg);border:1px solid var(--line);border-radius:4px;padding:12px;overflow-x:auto;font-size:12.5px;margin-top:8px;color:#A8C6A0}
+
+  /* stats strip */
+  .stats{display:none;margin-top:26px;border:1px solid var(--line);border-radius:4px;overflow:hidden}
+  .stats .cells{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr))}
+  .cell{padding:12px 16px;border-right:1px solid var(--line);background:var(--panel2)}
+  .cell:last-child{border-right:none}
+  .cell .k{font-family:var(--sans);font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted)}
+  .cell .v{font-size:19px;margin-top:2px}
+  .cell .v.hl{color:var(--amber)}
+
+  /* results — the evidence ledger */
+  .results{margin-top:26px}
+  .match{border:1px solid var(--line);border-radius:4px;margin-bottom:12px;background:var(--panel);overflow:hidden}
+  .mhead{display:flex;align-items:baseline;gap:14px;padding:13px 16px;cursor:pointer;flex-wrap:wrap}
+  .mhead:hover{background:var(--panel2)}
+  .sym{font-size:16px;font-weight:700;color:var(--amber);min-width:88px}
+  .cname{font-family:var(--sans);font-size:12.5px;color:var(--muted);flex:1;min-width:160px}
+  .mini{font-size:12.5px;color:var(--muted)}
+  .mini b{color:var(--text);font-weight:500}
+  .pos{color:var(--pass)} .neg{color:var(--fail)}
+  .mbody{display:none;border-top:1px solid var(--line);padding:14px 16px 16px}
+  .match.open .mbody{display:block}
+  .ledger{margin-top:4px}
+  .cond{display:grid;grid-template-columns:22px 1fr;gap:0 10px;padding:9px 0;border-bottom:1px dashed var(--line)}
+  .cond:last-child{border-bottom:none}
+  .mark{font-weight:700}
+  .mark.ok{color:var(--pass)} .mark.no{color:var(--fail)}
+  .cdesc{font-family:var(--sans);font-size:12.5px;color:var(--text)}
+  .cev{grid-column:2;font-size:12.5px;color:var(--muted);margin-top:2px}
+  .cev .num{color:#C9D6E4}
+  .mgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px;margin-top:14px}
+  .m{background:var(--panel2);border:1px solid var(--line);border-radius:4px;padding:8px 10px}
+  .m .k{font-family:var(--sans);font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}
+  .m .v{font-size:14px;margin-top:1px}
+
+  .sechead{font-family:var(--sans);font-size:12px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);margin:30px 0 12px;border-bottom:1px solid var(--line);padding-bottom:6px}
+  .nearmiss .sym{color:var(--muted)}
+  .foot{margin-top:36px;border-top:1px solid var(--line);padding-top:14px;font-family:var(--sans);font-size:12px;color:var(--muted);line-height:1.7}
+  .err{display:none;margin-top:14px;border:1px solid var(--fail);border-radius:4px;background:#1A0F10;color:#F0A8A8;padding:12px 14px;font-family:var(--sans);font-size:13px}
+  .spin{display:none;color:var(--amber);margin-left:6px}
+  @media (prefers-reduced-motion:no-preference){.spin.on{display:inline;animation:b 1s steps(4) infinite}}
+  @keyframes b{0%{content:""}}
+  .empty{padding:26px;text-align:center;color:var(--muted);font-family:var(--sans);border:1px dashed var(--line);border-radius:4px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1><span class="tick">▮</span> NSE TEXT SCREENER</h1>
+    <div class="status" id="status">connecting…</div>
+  </header>
+
+  <div class="eyebrow">Define the screen</div>
+  <div class="tabs">
+    <button class="tab active" id="tabEn" onclick="setTab('en')">Plain English</button>
+    <button class="tab" id="tabJs" onclick="setTab('js')">JSON spec</button>
+  </div>
+  <div class="qbox">
+    <textarea id="qEn" placeholder="e.g. stocks taking support at 50 EMA and in an uptrend"></textarea>
+    <textarea id="qJs" style="display:none" placeholder='{"logic":"AND","conditions":[...]}'></textarea>
+    <div class="row">
+      <button class="primary" id="btnInterpret" onclick="interpret()">Interpret query</button>
+      <button id="btnRun" onclick="run()" disabled>Run screen</button>
+      <span class="spin" id="spin">▮▮▮</span>
+    </div>
+    <div class="chips" id="chips"></div>
+  </div>
+
+  <div class="err" id="err"></div>
+
+  <div class="interp" id="interp">
+    <div class="eyebrow">Compiled interpretation — verify before trusting results</div>
+    <div class="english" id="english"></div>
+    <details><summary>show compiled filter spec (JSON)</summary><pre id="specPre"></pre></details>
+  </div>
+
+  <div class="stats" id="stats"><div class="cells" id="cells"></div></div>
+
+  <div class="results" id="results"></div>
+  <div class="foot" id="foot"></div>
+</div>
+
+<script>
+const PRESETS = [
+  ["Support at 50 EMA + uptrend", {logic:"AND",conditions:[
+    {type:"support_at_ma",ma:"ema_50",tolerance_pct:1.5,lookback:3},
+    {type:"trend",direction:"up"}]}],
+  ["Golden cross", {logic:"AND",conditions:[
+    {type:"cross",fast:"ema_50",slow:"ema_200",direction:"above",lookback:5}]}],
+  ["Oversold (RSI ≤ 30)", {logic:"AND",conditions:[
+    {type:"range",field:"rsi",max:30}]}],
+  ["Breakout + volume spike", {logic:"AND",conditions:[
+    {type:"breakout_resistance",lookback:5},
+    {type:"volume_spike",min_ratio:1.5}]}],
+  ["Near support, beating Nifty", {logic:"AND",conditions:[
+    {type:"near_support",tolerance_pct:2.5},
+    {type:"rel_strength",window:63,op:">",value_pct:0}]}],
+];
+let tab="en", spec=null;
+
+function $(id){return document.getElementById(id)}
+function setTab(t){tab=t;
+  $("tabEn").classList.toggle("active",t==="en");
+  $("tabJs").classList.toggle("active",t==="js");
+  $("qEn").style.display=t==="en"?"":"none";
+  $("qJs").style.display=t==="js"?"":"none";
+  $("btnInterpret").style.display=t==="en"?"":"none";
+  $("btnRun").disabled = t==="en" && !spec;
+}
+function err(msg){const e=$("err");e.textContent=msg;e.style.display=msg?"block":"none"}
+function busy(b){$("spin").classList.toggle("on",b);
+  $("btnInterpret").disabled=b;$("btnRun").disabled=b||(tab==="en"&&!spec)}
+
+async function api(path, body){
+  const r = await fetch(path,{method:body?"POST":"GET",
+    headers:{"Content-Type":"application/json"},
+    body:body?JSON.stringify(body):undefined});
+  const j = await r.json();
+  if(!r.ok) throw new Error(j.error||("HTTP "+r.status));
+  return j;
+}
+
+async function init(){
+  PRESETS.forEach(([label,s])=>{
+    const c=document.createElement("button");c.className="chip";c.textContent=label;
+    c.onclick=()=>{setTab("js");$("qJs").value=JSON.stringify(s,null,2);
+      spec=null;$("interp").style.display="none";$("btnRun").disabled=false};
+    $("chips").appendChild(c);
+  });
+  try{
+    const s=await api("/api/status");
+    $("status").innerHTML=`data as of <b>${s.as_of}</b> · <b>${s.universe_size}</b> symbols · ${s.history_years}y daily`+
+      (s.mode==="demo"?`<span class="badge">DEMO DATA</span>`:``);
+  }catch(e){$("status").textContent="backend unreachable";}
+}
+
+async function interpret(){
+  err("");spec=null;$("interp").style.display="none";
+  const q=$("qEn").value.trim();
+  if(!q){err("Enter a screen description first.");return}
+  busy(true);
+  try{
+    const r=await api("/api/parse",{query:q});
+    spec=r.spec;
+    $("english").textContent=r.english;
+    $("specPre").textContent=JSON.stringify(r.spec,null,2);
+    $("interp").style.display="block";
+    $("btnRun").disabled=false;
+  }catch(e){err(e.message)}
+  busy(false);
+}
+
+async function run(){
+  err("");
+  let s=spec;
+  if(tab==="js"){
+    try{s=JSON.parse($("qJs").value)}catch(e){err("Spec is not valid JSON: "+e.message);return}
+  }
+  if(!s){err("Interpret the query first.");return}
+  busy(true);
+  try{ render(await api("/api/screen",{spec:s})) }catch(e){err(e.message)}
+  busy(false);
+}
+
+const fmt=(v,suf="")=>v===null||v===undefined?"—":v+suf;
+const signed=v=>v===null||v===undefined?"—":
+  `<span class="${v>=0?"pos":"neg"}">${v>0?"+":""}${v}%</span>`;
+
+function render(r){
+  // interpretation always shown with results — the audit header
+  $("english").textContent=r.english;
+  $("specPre").textContent=JSON.stringify(r.spec,null,2);
+  $("interp").style.display="block";
+
+  const st=r.stats, cells=[
+    ["Universe",st.universe],["Liquidity-excluded",st.liquidity_excluded],
+    ["Evaluated",st.evaluated],["Matched",st.matched,true],
+    ["Near misses",st.near_misses],["As of",r.as_of]];
+  $("cells").innerHTML=cells.map(([k,v,hl])=>
+    `<div class="cell"><div class="k">${k}</div><div class="v ${hl?"hl":""}">${v}</div></div>`).join("");
+  $("stats").style.display="block";
+
+  const card=(m,miss)=>`
+    <div class="match ${miss?"nearmiss":""}" onclick="this.classList.toggle('open')">
+      <div class="mhead">
+        <span class="sym">${m.symbol}</span>
+        <span class="cname">${m.name} · ${m.industry}</span>
+        <span class="mini">₹<b>${fmt(m.metrics.close)}</b></span>
+        <span class="mini">3M ${signed(m.metrics.ret_3m_pct)}</span>
+        <span class="mini">RSI <b>${fmt(m.metrics.rsi)}</b></span>
+        <span class="mini"><b class="${miss?"neg":"pos"}">${m.conditions_passed}/${m.conditions_total}</b> conditions</span>
+      </div>
+      <div class="mbody">
+        <div class="eyebrow">Evidence — why this ${miss?"almost matched":"matched"}</div>
+        <div class="ledger">
+          ${m.evidence.map(e=>`
+            <div class="cond">
+              <span class="mark ${e.passed?"ok":"no"}">${e.passed?"✓":"✗"}</span>
+              <span class="cdesc">${e.description}</span>
+              <span class="cev">observed: <span class="num">${e.evidence}</span></span>
+            </div>`).join("")}
+        </div>
+        <div class="eyebrow" style="margin-top:16px">Snapshot metrics (latest bar)</div>
+        <div class="mgrid">
+          ${[["Close ₹",m.metrics.close],["vs EMA50 %",m.metrics.pct_vs_ema50],
+             ["RSI(14)",m.metrics.rsi],["ADX(14)",m.metrics.adx],
+             ["Vol ratio ×",m.metrics.vol_ratio],["ATR %",m.metrics.atr_pct],
+             ["1M ret %",m.metrics.ret_1m_pct],["3M ret %",m.metrics.ret_3m_pct],
+             ["vs 52w high %",m.metrics.pct_from_52w_high],
+             ["Med turnover ₹cr",m.metrics.turnover_cr]]
+            .map(([k,v])=>`<div class="m"><div class="k">${k}</div><div class="v">${fmt(v)}</div></div>`).join("")}
+        </div>
+      </div>
+    </div>`;
+
+  let html="";
+  html+=`<div class="sechead">Matches (${r.matches.length}) — click any row for the full evidence trail</div>`;
+  html+= r.matches.length? r.matches.map(m=>card(m,false)).join("")
+       : `<div class="empty">No stocks matched every condition. The near-misses below failed exactly one — loosen that condition if they look right.</div>`;
+  if(r.near_misses.length){
+    html+=`<div class="sechead">Near misses — failed exactly one condition</div>`;
+    html+=r.near_misses.map(m=>card(m,true)).join("");
+  }
+  $("results").innerHTML=html;
+
+  $("foot").innerHTML=`<b style="color:var(--text)">Methodology.</b> ${r.methodology.data}. Liquidity gate: ${r.methodology.liquidity_gate}. Missing-data policy: ${r.methodology.nan_policy}. Every screen is fully determined by the compiled spec above plus the as-of date — rerun with the same spec on the same data and you get the same result. Definitions of every condition: TECHNICAL_DESIGN.md.`;
+  window.scrollTo({top:$("stats").offsetTop-16,behavior:"smooth"});
+}
+init();
+</script>
+</body>
+</html>

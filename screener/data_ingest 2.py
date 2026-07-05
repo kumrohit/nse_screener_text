@@ -146,19 +146,3 @@ def load_benchmark() -> pd.Series | None:
     if BENCHMARK_STORE.exists():
         return pd.read_parquet(BENCHMARK_STORE)["nifty_close"]
     return None
-
-
-def full_backfill_symbols(universe_rows: pd.DataFrame) -> pd.DataFrame:
-    """Fresh 5y fetch for a subset of symbols, merged into the store."""
-    start = (dt.date.today()
-             - dt.timedelta(days=int(365.25 * config.HISTORY_YEARS)))
-    fresh = _clean(_download_chunk(
-        universe_rows["yf_ticker"].tolist(), start.isoformat()))
-    if fresh.empty:
-        return fresh
-    prices = pd.read_parquet(config.PRICE_STORE)
-    merged = (pd.concat([prices, fresh], ignore_index=True)
-              .drop_duplicates(subset=["symbol", "date"], keep="last")
-              .sort_values(["symbol", "date"]).reset_index(drop=True))
-    merged.to_parquet(config.PRICE_STORE, index=False)
-    return fresh

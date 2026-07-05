@@ -10,20 +10,6 @@ Usage (run locally, not in a sandbox — needs NSE/Yahoo network access):
 """
 from __future__ import annotations
 
-import sys
-
-if sys.version_info < (3, 10):  # must run before any third-party import
-    sys.exit(
-        f"This project needs Python 3.10+ (you are on "
-        f"{sys.version_info.major}.{sys.version_info.minor} at "
-        f"{sys.executable}).\n"
-        "On macOS this usually means the Command Line Tools Python was "
-        "picked up.\nFix:\n"
-        "    brew install python@3.12\n"
-        "    python3.12 -m venv .venv && source .venv/bin/activate\n"
-        "    pip install -r requirements.txt"
-    )
-
 import argparse
 import json
 import sys
@@ -54,45 +40,6 @@ def cmd_update(_args) -> None:
     prices = data_ingest.incremental_update(uni)
     data_ingest.fetch_benchmark()
     print(f"Store now ends {prices['date'].max().date()}")
-
-
-def cmd_verify(args) -> None:
-    import sys as _sys
-    from . import verify
-    uni = universe.fetch_universe()
-    prices = _load_prices()
-    if getattr(args, "jumps", False):
-        j = verify.list_jumps(prices)
-        if j.empty:
-            print("No single-day |moves| >40% in the store.")
-        else:
-            with pd.option_context("display.width", 160):
-                print(j.to_string(index=False))
-            print("\nFor UNADJUSTED rows: delete that symbol from the store"
-                  "\nand re-run update — a fresh yfinance fetch usually"
-                  "\ncomes back adjusted:"
-                  "\n  python -m screener.cli refetch SYMBOL")
-        return
-    panels = indicators.build_panels(prices)
-    results = verify.verify_store(
-        prices, uni, data_ingest.load_benchmark(), panels)
-    _sys.exit(verify.print_report(results))
-
-
-def cmd_refetch(args) -> None:
-    """Drop and freshly re-download one symbol (unadjusted-data remedy)."""
-    uni = universe.fetch_universe()
-    sym = args.symbol.upper()
-    if sym not in set(uni["symbol"]):
-        _sys_exit = __import__("sys").exit
-        _sys_exit(f"{sym} not in the Nifty 500 universe file")
-    prices = _load_prices()
-    before = (prices["symbol"] == sym).sum()
-    prices = prices[prices["symbol"] != sym]
-    prices.to_parquet(config.PRICE_STORE, index=False)
-    row = uni[uni["symbol"] == sym]
-    fresh = data_ingest.full_backfill_symbols(row)
-    print(f"{sym}: {before} rows dropped, {len(fresh)} re-fetched")
 
 
 def cmd_screen(args) -> None:
@@ -134,17 +81,6 @@ def main() -> None:
 
     sub.add_parser("backfill").set_defaults(func=cmd_backfill)
     sub.add_parser("update").set_defaults(func=cmd_update)
-    vf = sub.add_parser("verify",
-                        help="post-backfill data health report")
-    vf.add_argument("--jumps", action="store_true",
-                    help="list the exact bars behind the adjustment "
-                         "smell test, with split-ratio hints")
-    vf.set_defaults(func=cmd_verify)
-
-    rf = sub.add_parser("refetch",
-                        help="drop and re-download one symbol")
-    rf.add_argument("symbol")
-    rf.set_defaults(func=cmd_refetch)
 
     sc = sub.add_parser("screen")
     sc.add_argument("query", help="natural-language filter or JSON spec")
