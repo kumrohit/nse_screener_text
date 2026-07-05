@@ -152,16 +152,16 @@ Nifty 500 constituents from NSE's official index CSV; daily OHLCV from Yahoo Fin
 ## Tests
 
 ```bash
-python -m pytest tests/                    # 33 tests: synthetic series with known answers,
+python -m pytest tests/                    # 50 tests: synthetic series with known answers,
                                            # evidence-layer agreement, web API contract
-python -m tests.golden_harness             # live parser scoring vs 12 hand-verified queries
+python -m tests.golden_harness             # live parser scoring vs 14 hand-verified queries
 ```
 
-CI runs the offline suite on every push. The live harness gates any change to the parser prompt: 12/12 or it doesn't ship.
+CI runs the offline suite on every push. The live harness gates any change to the parser prompt: 14/14 or it doesn't ship.
 
 ## Roadmap
 
-Screen backtesting (forward-return distributions for any filter), candlestick/consolidation patterns, sector relative strength, NSE bhavcopy ingestion with delivery %, web UI. Details in the design doc.
+See [ROADMAP.md](ROADMAP.md) for the current execution checklist; design rationale for upcoming work lives in [TECHNICAL_DESIGN.md](TECHNICAL_DESIGN.md).
 
 ## Troubleshooting
 
