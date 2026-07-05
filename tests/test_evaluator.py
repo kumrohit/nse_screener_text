@@ -425,6 +425,28 @@ class TestVerify:
         assert by["benchmark (Nifty)"] == verify.FAIL
         assert verify.print_report(res) == 1
 
+    def test_screen_log_no_data_warns(self):
+        assert verify.check_screen_log(None)[1] == verify.WARN
+        assert verify.check_screen_log([])[1] == verify.WARN
+
+    def test_screen_log_valid_jsonl_passes(self):
+        import json
+        lines = [json.dumps({"ts": "x", "as_of": "latest", "spec": {},
+                             "stats": {}, "matched": []})
+                for _ in range(3)]
+        name, status, detail = verify.check_screen_log(lines)
+        assert status == verify.PASS and "3 entries" in detail
+
+    def test_screen_log_corrupt_line_fails(self):
+        import json
+        lines = [json.dumps({"ts": "x", "as_of": "latest", "spec": {},
+                             "stats": {}, "matched": []}),
+                 "{not valid json",
+                 json.dumps({"ts": "x"})]  # missing required keys
+        name, status, detail = verify.check_screen_log(lines)
+        assert status == verify.FAIL
+        assert "2/3" in detail
+
 
 class TestJumpDiagnostics:
     def test_split_like_flagged(self):
@@ -517,10 +539,58 @@ class TestConsolidation:
             {"conditions": [{"type": "bb_squeeze", "percentile": 5}]}))
 
 
+class TestGap:
+    def test_gap_up_detected(self):
+        p = _mk_ohlcv(100 + np.zeros(300))
+        prev_close = p["close"].iloc[-2]
+        p.iloc[-1, p.columns.get_loc("open")] = prev_close * 1.05
+        assert evaluate_symbol(p, dsl.validate({"conditions": [
+            {"type": "gap", "direction": "up", "min_gap_pct": 2.0,
+             "lookback": 3}]}))
+        assert not evaluate_symbol(p, dsl.validate({"conditions": [
+            {"type": "gap", "direction": "down", "min_gap_pct": 2.0,
+             "lookback": 3}]}))
+
+    def test_gap_outside_lookback_not_detected(self):
+        p = _mk_ohlcv(100 + np.zeros(300))
+        prev_close = p["close"].iloc[-10]
+        p.iloc[-9, p.columns.get_loc("open")] = prev_close * 1.05
+        assert not evaluate_symbol(p, dsl.validate({"conditions": [
+            {"type": "gap", "direction": "up", "min_gap_pct": 2.0,
+             "lookback": 3}]}))
+        assert evaluate_symbol(p, dsl.validate({"conditions": [
+            {"type": "gap", "direction": "up", "min_gap_pct": 2.0,
+             "lookback": 10}]}))
+
+    def test_gap_below_threshold_not_detected(self):
+        p = _mk_ohlcv(100 + np.zeros(300))
+        prev_close = p["close"].iloc[-2]
+        p.iloc[-1, p.columns.get_loc("open")] = prev_close * 1.01
+        assert not evaluate_symbol(p, dsl.validate({"conditions": [
+            {"type": "gap", "direction": "up", "min_gap_pct": 2.0,
+             "lookback": 3}]}))
+
+    def test_explainer(self):
+        from screener import explain
+        p = _mk_ohlcv(100 + np.zeros(300))
+        prev_close = p["close"].iloc[-2]
+        p.iloc[-1, p.columns.get_loc("open")] = prev_close * 1.05
+        spec = dsl.validate({"conditions": [
+            {"type": "gap", "direction": "up", "min_gap_pct": 2.0,
+             "lookback": 3}]})
+        ev = explain.explain_symbol(p, spec)
+        assert ev[0]["passed"] and "gapped up" in ev[0]["evidence"]
+
+    def test_dsl_validation(self):
+        with pytest.raises(dsl.DSLValidationError):
+            dsl.validate({"conditions": [
+                {"type": "gap", "direction": "sideways"}]})
+
+
 class TestPresets:
     def test_all_presets_validate_and_describe(self):
         from screener import presets
-        assert len(presets.PRESETS) >= 17
+        assert len(presets.PRESETS) >= 19
         ids = [p["id"] for p in presets.PRESETS]
         assert len(ids) == len(set(ids))
         for p in presets.PRESETS:

@@ -320,6 +320,29 @@ def _ex_candle(panel, c, i):
     return ev, {"pattern_date": _date(panel, hit)}
 
 
+def _ex_gap(panel, c, i):
+    lb = int(c.get("lookback", 3))
+    min_pct = float(c.get("min_gap_pct", 2.0))
+    direction = c["direction"]
+    lo = max(1, i - lb + 1)
+    hit = None
+    for j in range(lo, i + 1):
+        prev_close, o = panel["close"].iloc[j - 1], panel["open"].iloc[j]
+        if pd.isna(prev_close) or pd.isna(o) or prev_close == 0:
+            continue
+        gap_pct = 100 * (o / prev_close - 1)
+        if ((direction == "up" and gap_pct >= min_pct)
+                or (direction == "down" and gap_pct <= -min_pct)):
+            hit = (j, gap_pct)
+    if hit is None:
+        return (f"no {direction}-gap ≥ {min_pct}% in last {lb} bars", {})
+    j, gap_pct = hit
+    ev = (f"gapped {direction} {_f(gap_pct)}% on {_date(panel, j)} "
+          f"(open {_f(panel['open'].iloc[j])} vs prior close "
+          f"{_f(panel['close'].iloc[j - 1])})")
+    return ev, {"gap_date": _date(panel, j), "gap_pct": _f(gap_pct)}
+
+
 def _ex_tight_range(panel, c, i):
     bars = int(c.get("bars", 10))
     if i - bars + 1 < 0:
@@ -360,4 +383,5 @@ def _ex_flat_base(panel, c, i):
 _EXPLAINERS.update({
     "candle": _ex_candle, "tight_range": _ex_tight_range,
     "bb_squeeze": _ex_bb_squeeze, "flat_base": _ex_flat_base,
+    "gap": _ex_gap,
 })

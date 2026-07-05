@@ -74,7 +74,7 @@ python -m screener.webapp        # http://127.0.0.1:8501
 Three ways to define a screen: type it in **plain English** and hit
 **Interpret query** to see exactly how it was understood (plain English +
 the compiled JSON spec) before running; paste a raw **JSON spec**; or pick
-from the **preset dropdown** — 14 curated screens grouped by intent (trend
+from the **preset dropdown** — 19 curated screens grouped by intent (trend
 continuation, breakouts, reversals, relative strength, bearish), each shown
 with its rationale and compiled English, no API key needed.
 
@@ -89,11 +89,16 @@ close, the pattern date and its OHLC, the cross date, the stock-vs-Nifty
 return gap — plus an **evidence sparkline**: a 60-bar mini-chart overlaying
 exactly the series the spec referenced and the support/resistance levels
 the evidence found, so verifying a setup doesn't require switching to your
-charting platform. A **near-misses** section shows stocks that failed
-exactly one condition, so you can see the boundary of your filter.
+charting platform. A **near-misses** section (with a hide/show toggle)
+shows stocks that failed exactly one condition, so you can see the
+boundary of your filter. Large result sets are capped at 100 displayed
+matches with a note showing the true total — **export matches to CSV**
+downloads whatever's currently displayed.
 
 Every run is logged to `data/screen_log.jsonl` (spec + as-of date + matches
-— the full replay trail); browse it with `python -m screener.cli log`.
+— the full replay trail); browse it with `python -m screener.cli log`, or
+from the UI's **recent screens** panel, which replays any past run with
+one click (restores the spec and as-of date).
 
 With no price store yet, the app boots into a labelled 8-stock demo
 universe so everything above is explorable immediately after clone.
@@ -115,6 +120,7 @@ python -m screener.cli screen --dry-run "strong trend stocks pulling back to the
 python -m screener.cli presets                  # list pre-configured screens
 python -m screener.cli screen --preset flat_base_52w
 python -m screener.cli screen --out hits.csv "near support with huge volume"
+python -m screener.cli screen --as-of 2026-06-01 "gapped up on volume"
 python -m screener.cli log                      # recent runs (replay trail)
 
 # power users: raw spec, no LLM, no API key
@@ -142,6 +148,7 @@ python -m screener.cli screen --json '{"logic":"AND","conditions":[
 | "consolidating" / "tight range" | 10-bar range ≤ 8% |
 | "volatility squeeze" / "coiling" | Bollinger bandwidth in bottom 20% of its year |
 | "flat base" | 20-bar range ≤ 12% within 15% of the 52-week high |
+| "gapped up" / "gapped down" | open ≥2% away from the prior close, within last 3 bars |
 | "IT stocks" / "in the Healthcare sector" | exact Nifty 500 industry classification match |
 | "RS above 80" | stock's 3-month return ranks in the 80th percentile of the universe |
 | "market leaders" / "top sector" | stock's sector is in the top 3 by 3-month equal-weight momentum |
@@ -159,12 +166,12 @@ An NSE bhavcopy-based data layer (official OHLCV + delivery %, our own corporate
 ## Tests
 
 ```bash
-python -m pytest tests/                    # 83 tests: synthetic series with known answers,
+python -m pytest tests/                    # 91 tests: synthetic series with known answers,
                                            # evidence-layer agreement, web API contract
-python -m tests.golden_harness             # live parser scoring vs 18 hand-verified queries
+python -m tests.golden_harness             # live parser scoring vs 19 hand-verified queries
 ```
 
-CI runs the offline suite on every push. The live harness gates any change to the parser prompt: 18/18 or it doesn't ship.
+CI runs the offline suite on every push. The live harness gates any change to the parser prompt: 19/19 or it doesn't ship.
 
 ## Roadmap
 

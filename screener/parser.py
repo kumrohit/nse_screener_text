@@ -53,6 +53,8 @@ Additional condition types:
   {"type":"sector_rank","window":N,"bottom":N} — true if the stock's
   sector is among the top/bottom N sectors by equal-weight N-bar
   momentum. Exactly one of top/bottom, never both.
+- {"type":"gap","direction":"up"|"down","min_gap_pct":N,"lookback":N} —
+  open vs the prior bar's close, on any bar within the window.
 
 Allowed SECTOR values (exact strings, use exactly these):
 Automobile and Auto Components, Capital Goods, Chemicals, Construction,
@@ -105,6 +107,9 @@ Pattern conditions:
   {"type":"bb_squeeze","percentile":20,"lookback":252}
 - "flat base" / "basing near highs" ->
   {"type":"flat_base","bars":20,"max_range_pct":12,"max_from_52w_high_pct":15}
+- "gapped up" / "gap up" -> {"type":"gap","direction":"up","min_gap_pct":2.0,"lookback":3}
+  ("gapped down" -> direction down; a stated size like "gapped up 5%"
+  -> that min_gap_pct)
 - "uptrend" / "in an uptrend" -> {"type":"trend","direction":"up"}
 - "downtrend" -> {"type":"trend","direction":"down"}
 - "taking support at <MA>" / "bouncing off <MA>" ->

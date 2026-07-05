@@ -90,8 +90,15 @@
   .m .k{font-family:var(--sans);font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}
   .m .v{font-size:14px;margin-top:1px}
 
-  .sechead{font-family:var(--sans);font-size:12px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);margin:30px 0 12px;border-bottom:1px solid var(--line);padding-bottom:6px}
+  .sechead{font-family:var(--sans);font-size:12px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);margin:30px 0 12px;border-bottom:1px solid var(--line);padding-bottom:6px;display:flex;align-items:center;justify-content:space-between;gap:10px}
+  .sechead .toggle{font-family:var(--sans);font-size:11px;padding:3px 10px;border:1px solid var(--line);border-radius:3px;background:transparent;color:var(--muted);cursor:pointer;text-transform:none;letter-spacing:.02em}
+  .sechead .toggle:hover{color:var(--text);border-color:var(--amber-dim)}
+  .capnote{font-family:var(--sans);font-size:11.5px;color:var(--muted);margin:-6px 0 12px}
   .nearmiss .sym{color:var(--muted)}
+  .recent-row{display:flex;gap:12px;align-items:baseline;padding:8px 10px;border:1px solid var(--line);border-radius:4px;margin-bottom:6px;cursor:pointer;background:var(--panel2);flex-wrap:wrap}
+  .recent-row:hover{border-color:var(--amber-dim)}
+  .recent-row .cname{font-size:12px}
+  .btnsm{font-size:11px;padding:4px 12px}
   .foot{margin-top:36px;border-top:1px solid var(--line);padding-top:14px;font-family:var(--sans);font-size:12px;color:var(--muted);line-height:1.7}
   .err{display:none;margin-top:14px;border:1px solid var(--fail);border-radius:4px;background:#1A0F10;color:#F0A8A8;padding:12px 14px;font-family:var(--sans);font-size:13px}
   .spin{display:none;color:var(--amber);margin-left:6px}
@@ -126,8 +133,10 @@
       <select id="presetSel" onchange="pickPreset()">
         <option value="">— choose a pre-configured screen —</option>
       </select>
+      <button class="btnsm" id="btnRecent" onclick="toggleRecent()" type="button">recent screens</button>
     </div>
     <div class="pdesc" id="pdesc"></div>
+    <div id="recentPanel" style="display:none;margin-top:12px"></div>
   </div>
 
   <div class="err" id="err"></div>
@@ -138,7 +147,12 @@
     <details><summary>show compiled filter spec (JSON)</summary><pre id="specPre"></pre></details>
   </div>
 
-  <div class="stats" id="stats"><div class="cells" id="cells"></div></div>
+  <div class="stats" id="stats">
+    <div class="cells" id="cells"></div>
+    <div style="padding:10px 16px;border-top:1px solid var(--line)">
+      <button class="btnsm" id="btnExport" onclick="exportCsv()" type="button">export matches to CSV</button>
+    </div>
+  </div>
 
   <div class="results" id="results"></div>
   <div class="foot" id="foot"></div>
@@ -160,6 +174,42 @@ function pickPreset(){
   $("btnRun").disabled = false;
   d.innerHTML = `<b style="color:var(--text)">${p.name}.</b> ${p.description}<br>Compiles to: ${p.english}`;
   d.style.display = "block";
+}
+
+let RECENT_LOADED=false, RECENT_LOG=[];
+async function toggleRecent(){
+  const p=$("recentPanel"), opening = p.style.display==="none";
+  p.style.display = opening?"block":"none";
+  $("btnRecent").textContent = opening?"hide recent":"recent screens";
+  if(!opening || RECENT_LOADED) return;
+  p.innerHTML=`<div class="pdesc" style="display:block">loading…</div>`;
+  try{
+    RECENT_LOG = await api("/api/log");
+    RECENT_LOADED=true;
+    p.innerHTML = RECENT_LOG.length
+      ? RECENT_LOG.map((e,i)=>`
+        <div class="recent-row" onclick="replayRecent(${i})">
+          <span class="mini">${(e.ts||"").replace("T"," ").slice(0,16)}</span>
+          <span class="mini">as_of <b>${e.as_of}</b></span>
+          <span class="mini"><b>${e.stats.matched}</b>/${e.stats.evaluated}</span>
+          <span class="cname">${e.english||JSON.stringify(e.spec)}</span>
+        </div>`).join("")
+      : `<div class="pdesc" style="display:block">No screens logged yet — run one first.</div>`;
+  }catch(e){
+    p.innerHTML=`<div class="pdesc" style="display:block">Could not load recent screens: ${e.message}</div>`;
+  }
+}
+function replayRecent(i){
+  const e=RECENT_LOG[i];
+  setTab("js");
+  $("qJs").value=JSON.stringify(e.spec,null,2);
+  spec=null; $("interp").style.display="none";
+  $("btnRun").disabled=false;
+  $("asOf").value = (e.as_of && e.as_of!=="latest") ? e.as_of : "";
+  $("pdesc").innerHTML=`<b style="color:var(--text)">Replaying logged screen.</b> ${e.english||""}`;
+  $("pdesc").style.display="block";
+  toggleRecent();
+  window.scrollTo({top:0,behavior:"smooth"});
 }
 
 function $(id){return document.getElementById(id)}
@@ -260,11 +310,46 @@ const fmt=(v,suf="")=>v===null||v===undefined?"—":v+suf;
 const signed=v=>v===null||v===undefined?"—":
   `<span class="${v>=0?"pos":"neg"}">${v>0?"+":""}${v}%</span>`;
 
+let LAST_MATCHES=[], NEARMISS_SHOWN=true;
+function csvEscape(v){
+  const s=v===null||v===undefined?"":String(v);
+  return /[",\n]/.test(s)?`"${s.replace(/"/g,'""')}"`:s;
+}
+function exportCsv(){
+  if(!LAST_MATCHES.length){err("No matches to export.");return}
+  const cols=["symbol","name","industry","close","pct_vs_ema50","rsi","adx",
+    "vol_ratio","atr_pct","ret_1m_pct","ret_3m_pct","pct_from_52w_high",
+    "turnover_cr","conditions_passed","conditions_total"];
+  const rows=[cols.join(",")];
+  LAST_MATCHES.forEach(m=>{
+    const row=cols.map(c=>{
+      if(c in m) return csvEscape(m[c]);
+      return csvEscape(m.metrics?.[c]);
+    });
+    rows.push(row.join(","));
+  });
+  const blob=new Blob([rows.join("\n")],{type:"text/csv"});
+  const a=document.createElement("a");
+  a.href=URL.createObjectURL(blob);
+  a.download=`screen_matches_${new Date().toISOString().slice(0,10)}.csv`;
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+function toggleNearMiss(){
+  NEARMISS_SHOWN=!NEARMISS_SHOWN;
+  const box=$("nearMissBox");
+  if(box) box.style.display=NEARMISS_SHOWN?"":"none";
+  const btn=$("btnNearMiss");
+  if(btn) btn.textContent=NEARMISS_SHOWN?"hide":"show";
+}
+
 function render(r){
   // interpretation always shown with results — the audit header
   $("english").textContent=r.english;
   $("specPre").textContent=JSON.stringify(r.spec,null,2);
   $("interp").style.display="block";
+  LAST_MATCHES=r.matches;
+  RECENT_LOADED=false; // this run just appended to the log — refetch next open
 
   const st=r.stats, cells=[
     ["Universe",st.universe],["Liquidity-excluded",st.liquidity_excluded],
@@ -310,11 +395,16 @@ function render(r){
 
   let html="";
   html+=`<div class="sechead">Matches (${r.matches.length}) — click any row for the full evidence trail</div>`;
+  if(r.stats.matched>r.matches.length){
+    html+=`<div class="capnote">Showing the top ${r.matches.length} of ${r.stats.matched} matches (sorted by 3-month return) — refine the screen for a tighter list, or export CSV for the full displayed set.</div>`;
+  }
   html+= r.matches.length? r.matches.map(m=>card(m,false)).join("")
        : `<div class="empty">No stocks matched every condition. The near-misses below failed exactly one — loosen that condition if they look right.</div>`;
   if(r.near_misses.length){
-    html+=`<div class="sechead">Near misses — failed exactly one condition</div>`;
-    html+=r.near_misses.map(m=>card(m,true)).join("");
+    NEARMISS_SHOWN=true;
+    html+=`<div class="sechead">Near misses — failed exactly one condition
+      <button class="toggle" id="btnNearMiss" onclick="toggleNearMiss()" type="button">hide</button></div>`;
+    html+=`<div id="nearMissBox">${r.near_misses.map(m=>card(m,true)).join("")}</div>`;
   }
   $("results").innerHTML=html;
 

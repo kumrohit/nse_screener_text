@@ -40,6 +40,7 @@ DEFAULTS = {
     "tight_range": {"bars": 10},
     "rs_percentile": {"window": 63},
     "sector_rank": {"window": 63},
+    "gap": {"min_gap_pct": 2.0, "lookback": 3},
 }
 
 

@@ -61,7 +61,7 @@ CONDITION_TYPES = {
     "near_support", "near_resistance", "breakout_resistance",
     "rel_strength",
     "candle", "tight_range", "bb_squeeze", "flat_base",
-    "sector", "rs_percentile", "sector_rank",
+    "sector", "rs_percentile", "sector_rank", "gap",
 }
 
 # Nifty 500 universe file's exact industry strings (NSE classification).
@@ -194,6 +194,10 @@ def validate(screen: dict) -> dict:
             pass  # percentile/lookback have defaults
         elif ctype == "flat_base":
             pass  # all keys have defaults
+        elif ctype == "gap":
+            _require(c, ["direction"])
+            if c["direction"] not in ("up", "down"):
+                raise DSLValidationError("gap.direction must be up/down")
         elif ctype == "sector":
             _require(c, ["in"])
             sectors = c["in"]
@@ -314,6 +318,11 @@ def _append_condition(parts: list, c: dict) -> None:
                 f"flat base: {c.get('bars', 20)}-bar range ≤ "
                 f"{c.get('max_range_pct', 12)}% within "
                 f"{c.get('max_from_52w_high_pct', 15)}% of 52-week high")
+        elif t == "gap":
+            parts.append(
+                f"gapped {c['direction']} ≥ {c.get('min_gap_pct', 2.0)}% "
+                f"(open vs prior close) within last "
+                f"{c.get('lookback', 3)} bars")
         elif t == "sector":
             parts.append("sector in " + ", ".join(c["in"]))
         elif t == "rs_percentile":

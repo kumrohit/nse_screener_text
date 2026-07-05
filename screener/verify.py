@@ -11,6 +11,8 @@ data without touching disk.
 """
 from __future__ import annotations
 
+import json
+
 import numpy as np
 import pandas as pd
 
@@ -67,10 +69,35 @@ def check_cross_source(yf_prices: pd.DataFrame, bhav_prices: pd.DataFrame,
     return ("cross-source (bhavcopy)", PASS if bad.empty else WARN, detail)
 
 
+def check_screen_log(log_lines: list[str] | None) -> tuple[str, str, str]:
+    """Parseable-JSONL integrity check for `data/screen_log.jsonl`. Log
+    writes never raise (a failed write can't break a screen — see
+    webapp.py), so this is the only place a corrupt log would surface."""
+    if not log_lines:
+        return ("screen log", WARN,
+                "no screens logged yet — run one from the web UI")
+    required = {"ts", "as_of", "spec", "stats", "matched"}
+    bad = []
+    for i, line in enumerate(log_lines):
+        try:
+            obj = json.loads(line)
+        except json.JSONDecodeError:
+            bad.append(i)
+            continue
+        if not required.issubset(obj):
+            bad.append(i)
+    if bad:
+        return ("screen log", FAIL,
+                f"{len(bad)}/{len(log_lines)} lines unparseable or missing "
+                f"required keys (first bad line: {bad[0] + 1})")
+    return ("screen log", PASS, f"{len(log_lines)} entries, all parseable")
+
+
 def verify_store(prices: pd.DataFrame, universe: pd.DataFrame,
                  benchmark: pd.Series | None,
                  panels: dict[str, pd.DataFrame] | None = None,
-                 bhav_prices: pd.DataFrame | None = None
+                 bhav_prices: pd.DataFrame | None = None,
+                 screen_log_lines: list[str] | None = None
                  ) -> list[tuple[str, str, str]]:
     """[(check_name, status, detail), ...]"""
     r: list[tuple[str, str, str]] = []
@@ -175,6 +202,7 @@ def verify_store(prices: pd.DataFrame, universe: pd.DataFrame,
 
     # -- data layer v2 side-by-side evidence (Item 3, pre-cutover) ----
     r.append(check_cross_source(prices, bhav_prices))
+    r.append(check_screen_log(screen_log_lines))
     return r
 
 

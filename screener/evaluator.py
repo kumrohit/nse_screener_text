@@ -425,6 +425,25 @@ def cond_candle(panel, c, i) -> bool:
     return any(fn(panel, j) for j in range(max(0, i - lb + 1), i + 1))
 
 
+def cond_gap(panel, c, i) -> bool:
+    """Open gapped away from the prior bar's close by at least
+    min_gap_pct, on any bar within the lookback window."""
+    lb = int(c.get("lookback", 3))
+    min_pct = float(c.get("min_gap_pct", 2.0))
+    direction = c["direction"]
+    lo = max(1, i - lb + 1)
+    for j in range(lo, i + 1):
+        prev_close, o = panel["close"].iloc[j - 1], panel["open"].iloc[j]
+        if pd.isna(prev_close) or pd.isna(o) or prev_close == 0:
+            continue
+        gap_pct = 100 * (o / prev_close - 1)
+        if direction == "up" and gap_pct >= min_pct:
+            return True
+        if direction == "down" and gap_pct <= -min_pct:
+            return True
+    return False
+
+
 def cond_tight_range(panel, c, i) -> bool:
     bars = int(c.get("bars", 10))
     if i - bars + 1 < 0:
@@ -462,4 +481,5 @@ def cond_flat_base(panel, c, i) -> bool:
 DISPATCH.update({
     "candle": cond_candle, "tight_range": cond_tight_range,
     "bb_squeeze": cond_bb_squeeze, "flat_base": cond_flat_base,
+    "gap": cond_gap,
 })

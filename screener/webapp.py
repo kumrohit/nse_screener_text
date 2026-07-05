@@ -196,7 +196,7 @@ def screen(body: ScreenIn):
                   "evaluated": evaluated,
                   "matched": len(matches),
                   "near_misses": len(near_misses)},
-        "matches": matches,
+        "matches": matches[:MAX_MATCHES],
         "near_misses": near_misses[:15],
         "methodology": {
             "data": ("Synthetic demo data — run `python -m screener.cli "
@@ -221,6 +221,10 @@ _PLOTTABLE = {"ema_10", "ema_20", "ema_50", "ema_100", "ema_200",
               "high_52w", "low_52w"}
 _LEVEL_KEYS = ("support", "resistance", "level")
 SPARK_BARS = 60
+# Cap how many match cards the payload carries — stats.matched still
+# reports the true total, so a loose filter's size is never hidden,
+# just not rendered as hundreds of DOM cards.
+MAX_MATCHES = 100
 
 
 def _spark(panel: pd.DataFrame, spec: dict, evidence: list[dict],
@@ -265,7 +269,8 @@ def _log_run(spec: dict, as_of: str, stats: dict, matches: list) -> None:
         with open(LOG_FILE, "a") as fh:
             fh.write(_json.dumps({
                 "ts": _dt.datetime.now().isoformat(timespec="seconds"),
-                "as_of": as_of, "spec": spec, "stats": stats,
+                "as_of": as_of, "spec": spec, "english": dsl.describe(spec),
+                "stats": stats,
                 "matched": [m["symbol"] for m in matches],
             }) + "\n")
     except OSError:

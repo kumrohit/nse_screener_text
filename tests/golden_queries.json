@@ -302,5 +302,24 @@
       "error": true
     },
     "note": "unmapped sector name \u2014 parser must refuse, not guess the closest match"
+  },
+  {
+    "query": "stocks that gapped up on volume",
+    "expected": {
+      "logic": "AND",
+      "conditions": [
+        {
+          "type": "gap",
+          "direction": "up",
+          "min_gap_pct": 2.0,
+          "lookback": 3
+        },
+        {
+          "type": "volume_spike",
+          "min_ratio": 1.5
+        }
+      ],
+      "as_of": "latest"
+    }
   }
 ]

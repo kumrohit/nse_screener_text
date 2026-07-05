@@ -194,6 +194,31 @@ PRESETS: list[dict] = [
             {"type": "sector_rank", "window": 63, "bottom": 3},
             {"type": "candle", "pattern": "hammer", "lookback": 2}]},
     },
+    {
+        "id": "weekly_squeeze",
+        "name": "Weekly uptrend, daily volatility squeeze",
+        "group": "Breakouts",
+        "description": "Higher-timeframe trend intact while the daily "
+                       "chart coils into its tightest Bollinger bandwidth "
+                       "in a year — a base building inside a bigger "
+                       "uptrend, not a standalone squeeze.",
+        "spec": {"logic": "AND", "conditions": [
+            {"type": "trend", "direction": "up", "timeframe": "weekly"},
+            {"type": "bb_squeeze", "percentile": 20, "lookback": 252}]},
+    },
+    {
+        "id": "gap_up_followthrough",
+        "name": "Gap-up with volume follow-through",
+        "group": "Breakouts",
+        "description": "A recent gap-up (open ≥2% above the prior close) "
+                       "confirmed by expanded volume and an intact "
+                       "uptrend — the gap wasn't a one-day wonder.",
+        "spec": {"logic": "AND", "conditions": [
+            {"type": "gap", "direction": "up", "min_gap_pct": 2.0,
+             "lookback": 5},
+            {"type": "volume_spike", "min_ratio": 1.5},
+            {"type": "trend", "direction": "up"}]},
+    },
 ]
 
 # fail fast: an invalid preset is a bug, not a runtime condition

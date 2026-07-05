@@ -5,14 +5,14 @@ commits that complete them; anything descoped gets struck through with a
 one-line reason, not silently deleted. Design rationale lives in
 TECHNICAL_DESIGN.md; this file is the *what and in which order*.
 
-Status snapshot: v0.6.1 — data layer live-verified (500/500),
-19-condition DSL (incl. sector filters & cross-sectional relative
-strength), patterns, 17 presets, web UI with evidence trails,
-sparklines, as-of replay, screen log. NSE bhavcopy data layer v2 built
-and validated, running side-by-side (2-week evidence clock started
-2026-07-05); not cut over, nothing reads from it yet. 83 tests green
-(3 known local-environment failures unrelated to app code — see
-Item 0).
+Status snapshot: v0.6.2 — data layer live-verified (500/500),
+20-condition DSL (incl. sector filters & cross-sectional relative
+strength, gap), patterns, 19 presets, web UI with evidence trails,
+sparklines, as-of replay, screen log, CSV export, recent-screens
+replay. NSE bhavcopy data layer v2 built and validated, running
+side-by-side (2-week evidence clock started 2026-07-05); not cut
+over, nothing reads from it yet. 91 tests green (3 known
+local-environment failures unrelated to app code — see Item 0).
 
 ---
 
@@ -170,18 +170,37 @@ machinery it needs already exists. **Unpark when**: Items 1–2 above are
 done AND at least one screen has earned enough trust in live use that
 "has this setup historically carried edge?" is the blocking question.
 
-## 4. Small backlog (slip in anywhere, one commit each)
+## 4. Small backlog (slip in anywhere, one commit each) — cleared 2026-07-05
 
-- [ ] UI: "Recent screens" panel fed by `/api/log` (replay any past run
-      with one click — spec + as-of restore).
-- [ ] UI: CSV export button on results (server already computes rows).
-- [ ] UI: near-miss toggle (hide/show) and match-count cap for huge
-      result sets.
-- [ ] CLI: `screen --as-of YYYY-MM-DD` flag (parity with the UI picker).
-- [ ] `verify`: add screen-log integrity check (parseable JSONL).
-- [ ] Preset ideas parking lot: weekly squeeze, gap-up follow-through
-      (needs gap condition), post-earnings drift (needs events data —
-      likely never; note why).
+- [x] UI: "Recent screens" panel fed by `/api/log` (replay any past run
+      with one click — spec + as-of restore). Caches the fetched log and
+      refetches only when a new screen completes — an earlier version
+      cached forever and went stale after the first run; caught and
+      fixed via live browser testing (Playwright driver against the
+      real server, not just unit tests).
+- [x] UI: CSV export button on results (server already computes rows).
+      Client-side generation from the already-fetched JSON — no
+      dedicated export endpoint needed.
+- [x] UI: near-miss toggle (hide/show) and match-count cap for huge
+      result sets. Matches capped at 100 in the payload (`stats.matched`
+      still reports the true total); a note explains the cap when active.
+- [x] CLI: `screen --as-of YYYY-MM-DD` flag (parity with the UI picker).
+- [x] `verify`: add screen-log integrity check (parseable JSONL,
+      required keys present per line).
+- [x] Preset ideas parking lot: **weekly squeeze** — reinterpreted as
+      combining the *existing* weekly-trend + daily-`bb_squeeze`
+      conditions (same pattern as the `weekly_up_daily_dip` preset)
+      rather than adding Bollinger Bands to the weekly panel, which
+      would have been a bigger change than a one-commit backlog item.
+      **Gap-up follow-through** — added a new `gap` DSL condition
+      (direction, min_gap_pct, lookback) + parser vocabulary + 1 golden
+      fixture + preset (`gap_up_followthrough`: gap up + volume spike +
+      uptrend). **Post-earnings drift** — struck, not implemented: it
+      needs earnings-announcement dates, which is events/fundamentals
+      data explicitly out of scope per TECHNICAL_DESIGN.md §1 ("no
+      fundamentals, no intraday, no derivatives data... refuse anything
+      outside this scope rather than approximate it"). Revisit only if
+      that scope decision itself is revisited.
 
 ## 5. Recurring operations (not one-time)
 
