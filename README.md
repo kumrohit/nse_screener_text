@@ -166,7 +166,7 @@ An NSE bhavcopy-based data layer (official OHLCV + delivery %, our own corporate
 ## Tests
 
 ```bash
-python -m pytest tests/                    # 91 tests: synthetic series with known answers,
+python -m pytest tests/                    # 92 tests: synthetic series with known answers,
                                            # evidence-layer agreement, web API contract
 python -m tests.golden_harness             # live parser scoring vs 19 hand-verified queries
 ```

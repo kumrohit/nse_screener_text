@@ -5,14 +5,16 @@ commits that complete them; anything descoped gets struck through with a
 one-line reason, not silently deleted. Design rationale lives in
 TECHNICAL_DESIGN.md; this file is the *what and in which order*.
 
-Status snapshot: v0.6.2 — data layer live-verified (500/500),
+Status snapshot: v0.6.3 — data layer live-verified (500/500),
 20-condition DSL (incl. sector filters & cross-sectional relative
 strength, gap), patterns, 19 presets, web UI with evidence trails,
 sparklines, as-of replay, screen log, CSV export, recent-screens
 replay. NSE bhavcopy data layer v2 built and validated, running
 side-by-side (2-week evidence clock started 2026-07-05); not cut
-over, nothing reads from it yet. 91 tests green (3 known
-local-environment failures unrelated to app code — see Item 0).
+over, nothing reads from it yet. 92 tests green, no known
+failures — `tests/conftest.py` makes the suite hermetic (forces
+demo mode so it passes identically in CI and on a dev machine
+that has already run `backfill`).
 
 ---
 
