@@ -13,22 +13,37 @@ sparklines, as-of replay, screen log. 50 tests green.
 
 ## 0. One-time setup & validation (do before/alongside Item 2)
 
-- [ ] **Push to GitHub** — single permanent working folder, retire the
-      `_v1`-style folder copies. `git remote add origin … && git push -u
-      origin main`. Acceptance: CI badge green on first push.
-- [ ] **Fix commit author** — `git commit --amend --reset-author` (or a
-      `.mailmap`) so history links to the real GitHub identity.
-- [ ] **Run the live golden-query harness** (needs API key):
-      `python -m tests.golden_harness`. Acceptance: 14/14. Any failure =
-      parser prompt fix before further vocabulary is added.
-- [ ] **Classify the 6 jump bars** — `verify --jumps`; refetch the
-      split-like rows, note real events. Acceptance: re-run shows every
-      remaining jump classified as a genuine event or demerger.
-- [ ] **Calibrate `support_at_ma` tolerance** — run the flagship preset
-      across 3–4 as-of dates, eyeball sparklines vs charting platform.
-      Acceptance: a deliberate decision recorded in TECHNICAL_DESIGN.md
-      (§6) to keep 1.5%/3 bars or change it, based on ≥10 real examples
-      and the near-miss lists.
+- [x] **Push to GitHub** — single permanent working folder, retire the
+      `_v1`-style folder copies. Done 2026-07-05: stray `latest` remote
+      (pointing at a sibling folder copy, `nse_screener4`) removed,
+      pending commit pushed to `origin/main`.
+- [x] **Fix commit author** — used a `.mailmap` (non-destructive: remaps
+      display identity without rewriting already-pushed history or
+      force-pushing) plus fixed local `git config user.name/email` for
+      future commits, instead of `--amend --reset-author`.
+- [x] **Classify the 6 jump bars** — `verify --jumps`. 3 confirmed
+      genuine demergers via public news (ABFRL — Aditya Birla Lifestyle
+      Brands spin-off, record date 2025-05-22; TMPV — Tata Motors CV/PV
+      split, 2025-10-14; VEDL — Vedanta 5-way demerger, 2026-04-30). The
+      other 3 (CGCL, GPIL, MOTILALOFS) are **not** simple unadjusted
+      splits — refetching returned byte-identical data. Their ratios
+      match real 2024 corporate actions almost exactly, but the jump
+      lands on 2024-01-01 for all three, months before the true record
+      dates (Mar/Jun/Oct 2024) — a yfinance/Yahoo adjustment-splice bug,
+      documented as a known caveat in TECHNICAL_DESIGN.md §4. Not
+      currently affecting live screens (252-bar lookback as of
+      2026-07-03 only reaches back to 2025-06-30) but would corrupt
+      historical as-of replays dated in that window for those 3 symbols.
+- [x] **Calibrate `support_at_ma` tolerance** — ran the flagship preset
+      (`support_50ema_uptrend`) across 4 as-of dates (2026-04-01,
+      2026-05-01, 2026-06-01, 2026-07-03), 3 matches each. Decision:
+      **keep 1.5%/3 bars** for now — recorded in TECHNICAL_DESIGN.md §6.
+      Revisit with a larger sample if near-miss lists suggest the
+      tolerance is too tight/loose in practice.
+
+Deferred from this item — see §6 below: **live golden-query harness
+run** (`python -m tests.golden_harness`, needs `ANTHROPIC_API_KEY`,
+unavailable in the current dev environment).
 
 ## 1. Item 2 — Sector filters & cross-sectional relative strength
 
@@ -152,3 +167,7 @@ done AND at least one screen has earned enough trust in live use that
 - Monthly timeframe — weekly machinery generalises when needed.
 - Intraday — out of scope by design.
 - Fundamentals — out of scope by design; parser refuses.
+- Live golden-query harness run (`python -m tests.golden_harness`) —
+  needs `ANTHROPIC_API_KEY`, not set in the current dev environment.
+  Revisit when the key is available; still gates any parser-prompt
+  change per §5.
