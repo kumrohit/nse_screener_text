@@ -90,6 +90,15 @@ def status():
             "history_years": config.HISTORY_YEARS}
 
 
+@app.get("/api/presets")
+def presets_list():
+    from . import presets
+    return [{"id": p["id"], "name": p["name"], "group": p["group"],
+             "description": p["description"], "spec": p["spec"],
+             "english": dsl.describe(p["spec"])}
+            for p in presets.PRESETS]
+
+
 @app.post("/api/parse")
 def parse(body: ParseIn):
     from . import parser
@@ -119,7 +128,11 @@ def screen(body: ScreenIn):
     evaluated = liquidity_excluded = 0
 
     for sym, panel in st["panels"].items():
-        med_turnover = panel["turnover_cr"].tail(20).median()
+        i = evaluator._row_at(panel, as_of)
+        if i is None or i < 0:
+            continue
+        med_turnover = panel["turnover_cr"].iloc[
+            max(0, i - 19): i + 1].median()
         if (st["mode"] == "live"
                 and pd.notna(med_turnover)
                 and med_turnover < config.MIN_MEDIAN_TURNOVER_CR):
@@ -135,7 +148,7 @@ def screen(body: ScreenIn):
                                 and n_passed == len(evidence) - 1):
             continue
 
-        last = panel.iloc[-1]
+        last = panel.iloc[i]
         row = {
             "symbol": sym,
             "conditions_passed": n_passed,
@@ -161,11 +174,14 @@ def screen(body: ScreenIn):
         row["industry"] = (meta["industry"].iloc[0]
                            if len(meta) and pd.notna(meta["industry"].iloc[0])
                            else "—")
+        row["spark"] = _spark(panel, spec, evidence, i)
         (matches if matched else near_misses).append(row)
 
     matches.sort(key=lambda r: (r["metrics"]["ret_3m_pct"] is None,
                                 -(r["metrics"]["ret_3m_pct"] or 0)))
     near_misses.sort(key=lambda r: -r["conditions_passed"])
+    _log_run(spec, st["as_of"] if as_of == "latest" else as_of,
+             {"matched": len(matches), "evaluated": evaluated}, matches)
     return {
         "english": dsl.describe(spec),
         "spec": spec,
@@ -194,6 +210,71 @@ def screen(body: ScreenIn):
 
 def _r(x, nd=2):
     return None if x is None or pd.isna(x) else round(float(x), nd)
+
+
+_PLOTTABLE = {"ema_10", "ema_20", "ema_50", "ema_100", "ema_200",
+              "sma_20", "sma_50", "sma_200", "bb_upper", "bb_lower",
+              "high_52w", "low_52w"}
+_LEVEL_KEYS = ("support", "resistance", "level")
+SPARK_BARS = 60
+
+
+def _spark(panel: pd.DataFrame, spec: dict, evidence: list[dict],
+           i: int) -> dict:
+    """Last SPARK_BARS bars up to the as-of row, plus every series the
+    spec references and every horizontal level the evidence produced —
+    so the mini-chart shows exactly what the conditions looked at."""
+    lo = max(0, i - SPARK_BARS + 1)
+    win = panel.iloc[lo: i + 1]
+    fields: set[str] = set()
+    for c in spec["conditions"]:
+        if c.get("timeframe") == "weekly":
+            continue  # daily chart; weekly overlays would mislead
+        for k in ("left", "right", "ref", "ma", "fast", "slow", "field"):
+            v = c.get(k)
+            if isinstance(v, str) and v in _PLOTTABLE:
+                fields.add(v)
+    levels = {}
+    for e in evidence:
+        for k in _LEVEL_KEYS:
+            if e["values"].get(k) is not None:
+                levels[k] = e["values"][k]
+    return {
+        "dates": [d.strftime("%Y-%m-%d") for d in win.index],
+        "close": [_r(v) for v in win["close"]],
+        "low": [_r(v) for v in win["low"]],
+        "high": [_r(v) for v in win["high"]],
+        "series": {f: [_r(v) for v in win[f]] for f in sorted(fields)},
+        "levels": levels,
+    }
+
+
+LOG_FILE = config.DATA_DIR / "screen_log.jsonl"
+
+
+def _log_run(spec: dict, as_of: str, stats: dict, matches: list) -> None:
+    """Append-only replay trail: spec + data date fully determine results."""
+    import json as _json
+    import datetime as _dt
+    try:
+        config.DATA_DIR.mkdir(parents=True, exist_ok=True)
+        with open(LOG_FILE, "a") as fh:
+            fh.write(_json.dumps({
+                "ts": _dt.datetime.now().isoformat(timespec="seconds"),
+                "as_of": as_of, "spec": spec, "stats": stats,
+                "matched": [m["symbol"] for m in matches],
+            }) + "\n")
+    except OSError:
+        pass  # logging must never break a screen
+
+
+@app.get("/api/log")
+def screen_log(limit: int = 20):
+    import json as _json
+    if not LOG_FILE.exists():
+        return []
+    lines = LOG_FILE.read_text().strip().splitlines()[-limit:]
+    return [_json.loads(l) for l in reversed(lines)]
 
 
 if __name__ == "__main__":

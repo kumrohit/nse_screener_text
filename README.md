@@ -71,14 +71,32 @@ FAIL so it can gate a cron pipeline (`... update && ... verify && ...`).
 python -m screener.webapp        # http://127.0.0.1:8501
 ```
 
-Type a screen in plain English, hit **Interpret query** to see exactly how it
-was understood (plain English + the compiled JSON spec), then **Run screen**.
-Every match expands into an **evidence trail**: each condition with a ✓/✗ and
-the observed values behind it — which bar touched the EMA and how close, the
-actual RSI, the cross date, the stock-vs-Nifty return gap. A **near-misses**
-section shows stocks that failed exactly one condition, so you can see the
-boundary of your filter. With no price store yet, it boots into a labelled
-8-stock demo universe; preset chips run without an API key.
+Three ways to define a screen: type it in **plain English** and hit
+**Interpret query** to see exactly how it was understood (plain English +
+the compiled JSON spec) before running; paste a raw **JSON spec**; or pick
+from the **preset dropdown** — 14 curated screens grouped by intent (trend
+continuation, breakouts, reversals, relative strength, bearish), each shown
+with its rationale and compiled English, no API key needed.
+
+An **as-of date picker** replays any historical date — evaluation, metrics,
+and charts all reflect that date, so you can see exactly what a screen
+would have shown last month (current-constituent universe, so historical
+replays carry survivorship bias — see the design doc).
+
+Every match expands into an **evidence trail**: each condition with a ✓/✗
+and the observed values behind it — which bar touched the EMA and how
+close, the pattern date and its OHLC, the cross date, the stock-vs-Nifty
+return gap — plus an **evidence sparkline**: a 60-bar mini-chart overlaying
+exactly the series the spec referenced and the support/resistance levels
+the evidence found, so verifying a setup doesn't require switching to your
+charting platform. A **near-misses** section shows stocks that failed
+exactly one condition, so you can see the boundary of your filter.
+
+Every run is logged to `data/screen_log.jsonl` (spec + as-of date + matches
+— the full replay trail); browse it with `python -m screener.cli log`.
+
+With no price store yet, the app boots into a labelled 8-stock demo
+universe so everything above is explorable immediately after clone.
 
 ## CLI usage
 
@@ -93,7 +111,10 @@ python -m screener.cli screen "breaking out above resistance and outperforming t
 python -m screener.cli screen --dry-run "strong trend stocks pulling back to the 20 EMA"
 
 # save results
+python -m screener.cli presets                  # list pre-configured screens
+python -m screener.cli screen --preset flat_base_52w
 python -m screener.cli screen --out hits.csv "near support with huge volume"
+python -m screener.cli log                      # recent runs (replay trail)
 
 # power users: raw spec, no LLM, no API key
 python -m screener.cli screen --json '{"logic":"AND","conditions":[
@@ -116,6 +137,10 @@ python -m screener.cli screen --json '{"logic":"AND","conditions":[
 | "breaking out above resistance" | close crossed a prior multi-touch resistance level |
 | "outperforming the Nifty" | 3-month return above the Nifty 50's |
 | "on the weekly chart" | condition evaluated on weekly bars |
+| "inside bar", "NR7", "hammer", "bullish engulfing"… | exact candlestick formulas (see design doc §9a) |
+| "consolidating" / "tight range" | 10-bar range ≤ 8% |
+| "volatility squeeze" / "coiling" | Bollinger bandwidth in bottom 20% of its year |
+| "flat base" | 20-bar range ≤ 12% within 15% of the 52-week high |
 | "up 10% in a month", "between 40 and 60" | explicit numbers pass straight through |
 
 Anything it can't map to the documented vocabulary — P/E ratios, news, "good management" — returns an explicit error instead of a silently wrong screen.

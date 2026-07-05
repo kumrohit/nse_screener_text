@@ -60,6 +60,12 @@ CONDITION_TYPES = {
     "volume_spike", "range", "change",
     "near_support", "near_resistance", "breakout_resistance",
     "rel_strength",
+    "candle", "tight_range", "bb_squeeze", "flat_base",
+}
+
+CANDLE_PATTERNS = {
+    "inside_bar", "nr7", "bullish_engulfing", "bearish_engulfing",
+    "hammer", "shooting_star",
 }
 
 # Fields available on the weekly panel (subset — see indicators.compute_weekly_panel)
@@ -162,6 +168,18 @@ def validate(screen: dict) -> dict:
             _require(c, ["window", "op", "value_pct"])
             if c["op"] not in VALID_OPS:
                 raise DSLValidationError(f"bad op {c['op']!r}")
+        elif ctype == "candle":
+            _require(c, ["pattern"])
+            if c["pattern"] not in CANDLE_PATTERNS:
+                raise DSLValidationError(
+                    f"unknown candle pattern {c['pattern']!r}; "
+                    f"one of {sorted(CANDLE_PATTERNS)}")
+        elif ctype == "tight_range":
+            _require(c, ["max_range_pct"])
+        elif ctype == "bb_squeeze":
+            pass  # percentile/lookback have defaults
+        elif ctype == "flat_base":
+            pass  # all keys have defaults
     return screen
 
 
@@ -241,5 +259,23 @@ def _append_condition(parts: list, c: dict) -> None:
             parts.append(
                 f"{c['window']}-bar return minus Nifty {c['op']} "
                 f"{c['value_pct']}%")
+        elif t == "candle":
+            nm = c["pattern"].replace("_", " ")
+            lb = c.get("lookback", 1)
+            parts.append(f"{nm} candle" +
+                         (f" within last {lb} bars" if lb > 1 else
+                          " on the latest bar"))
+        elif t == "tight_range":
+            parts.append(
+                f"{c.get('bars', 10)}-bar range ≤ {c['max_range_pct']}%")
+        elif t == "bb_squeeze":
+            parts.append(
+                f"Bollinger bandwidth in bottom {c.get('percentile', 20)}% "
+                f"of its {c.get('lookback', 252)}-bar history")
+        elif t == "flat_base":
+            parts.append(
+                f"flat base: {c.get('bars', 20)}-bar range ≤ "
+                f"{c.get('max_range_pct', 12)}% within "
+                f"{c.get('max_from_52w_high_pct', 15)}% of 52-week high")
         if c.get("timeframe") == "weekly" and parts:
             parts[-1] += " [weekly]"

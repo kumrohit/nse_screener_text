@@ -39,9 +39,15 @@
   button:hover{filter:brightness(1.12)}
   button:disabled{opacity:.4;cursor:default}
   button:focus-visible{outline:2px solid var(--pass);outline-offset:2px}
-  .chips{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px}
-  .chip{font-family:var(--sans);font-size:11.5px;padding:4px 11px;border:1px solid var(--line);border-radius:12px;color:var(--muted);cursor:pointer;background:none}
-  .chip:hover{color:var(--amber);border-color:var(--amber-dim)}
+  select{background:var(--bg);border:1px solid var(--line);border-radius:4px;color:var(--text);font-family:var(--sans);font-size:12.5px;padding:7px 10px;min-width:280px;max-width:100%}
+  select:focus{outline:2px solid var(--amber-dim)}
+  .asof{font-family:var(--sans);font-size:12px;color:var(--muted);display:flex;align-items:center;gap:6px}
+  .asof input{background:var(--bg);border:1px solid var(--line);border-radius:4px;color:var(--text);font-family:var(--mono);font-size:12.5px;padding:6px 8px;color-scheme:dark}
+  .spark{margin-top:14px;background:var(--panel2);border:1px solid var(--line);border-radius:4px;padding:8px 10px 4px}
+  .spark svg{display:block;width:100%;height:120px}
+  .sleg{font-family:var(--sans);font-size:10.5px;color:var(--muted);letter-spacing:.05em;margin-top:2px}
+  .sleg span{margin-right:12px}
+  .pdesc{font-family:var(--sans);font-size:12px;color:var(--muted);margin-top:8px;display:none;border-left:2px solid var(--line);padding-left:10px}
 
   /* interpretation */
   .interp{margin-top:22px;background:var(--panel);border:1px solid var(--line);border-left:3px solid var(--amber);border-radius:4px;padding:16px 18px;display:none}
@@ -112,9 +118,16 @@
     <div class="row">
       <button class="primary" id="btnInterpret" onclick="interpret()">Interpret query</button>
       <button id="btnRun" onclick="run()" disabled>Run screen</button>
+      <label class="asof">as of <input type="date" id="asOf" title="screen a historical date (blank = latest bar)"></label>
       <span class="spin" id="spin">▮▮▮</span>
     </div>
-    <div class="chips" id="chips"></div>
+    <div class="row" style="margin-top:14px">
+      <label class="eyebrow" for="presetSel" style="margin:0">Preset screens</label>
+      <select id="presetSel" onchange="pickPreset()">
+        <option value="">— choose a pre-configured screen —</option>
+      </select>
+    </div>
+    <div class="pdesc" id="pdesc"></div>
   </div>
 
   <div class="err" id="err"></div>
@@ -132,22 +145,22 @@
 </div>
 
 <script>
-const PRESETS = [
-  ["Support at 50 EMA + uptrend", {logic:"AND",conditions:[
-    {type:"support_at_ma",ma:"ema_50",tolerance_pct:1.5,lookback:3},
-    {type:"trend",direction:"up"}]}],
-  ["Golden cross", {logic:"AND",conditions:[
-    {type:"cross",fast:"ema_50",slow:"ema_200",direction:"above",lookback:5}]}],
-  ["Oversold (RSI ≤ 30)", {logic:"AND",conditions:[
-    {type:"range",field:"rsi",max:30}]}],
-  ["Breakout + volume spike", {logic:"AND",conditions:[
-    {type:"breakout_resistance",lookback:5},
-    {type:"volume_spike",min_ratio:1.5}]}],
-  ["Near support, beating Nifty", {logic:"AND",conditions:[
-    {type:"near_support",tolerance_pct:2.5},
-    {type:"rel_strength",window:63,op:">",value_pct:0}]}],
-];
+let PRESETS = [];   // loaded from /api/presets
 let tab="en", spec=null;
+
+function pickPreset(){
+  const id = $("presetSel").value;
+  const p = PRESETS.find(x=>x.id===id);
+  const d = $("pdesc");
+  if(!p){d.style.display="none";return}
+  setTab("js");
+  $("qJs").value = JSON.stringify(p.spec, null, 2);
+  spec = null;
+  $("interp").style.display="none";
+  $("btnRun").disabled = false;
+  d.innerHTML = `<b style="color:var(--text)">${p.name}.</b> ${p.description}<br>Compiles to: ${p.english}`;
+  d.style.display = "block";
+}
 
 function $(id){return document.getElementById(id)}
 function setTab(t){tab=t;
@@ -172,12 +185,17 @@ async function api(path, body){
 }
 
 async function init(){
-  PRESETS.forEach(([label,s])=>{
-    const c=document.createElement("button");c.className="chip";c.textContent=label;
-    c.onclick=()=>{setTab("js");$("qJs").value=JSON.stringify(s,null,2);
-      spec=null;$("interp").style.display="none";$("btnRun").disabled=false};
-    $("chips").appendChild(c);
-  });
+  try{
+    PRESETS = await api("/api/presets");
+    const sel = $("presetSel"), groups = {};
+    PRESETS.forEach(p=>{(groups[p.group]=groups[p.group]||[]).push(p)});
+    for(const [g,items] of Object.entries(groups)){
+      const og=document.createElement("optgroup");og.label=g;
+      items.forEach(p=>{const o=document.createElement("option");
+        o.value=p.id;o.textContent=p.name;og.appendChild(o)});
+      sel.appendChild(og);
+    }
+  }catch(e){/* presets unavailable — dropdown stays empty */}
   try{
     const s=await api("/api/status");
     $("status").innerHTML=`data as of <b>${s.as_of}</b> · <b>${s.universe_size}</b> symbols · ${s.history_years}y daily`+
@@ -208,11 +226,36 @@ async function run(){
     try{s=JSON.parse($("qJs").value)}catch(e){err("Spec is not valid JSON: "+e.message);return}
   }
   if(!s){err("Interpret the query first.");return}
+  const d = $("asOf").value;
+  s = {...s, as_of: d || "latest"};
   busy(true);
   try{ render(await api("/api/screen",{spec:s})) }catch(e){err(e.message)}
   busy(false);
 }
 
+const SCOL=["#5B9BD5","#B07CC6","#6FBF9F","#D5A15B"]; // overlay palette
+function spark(m){
+  const s=m.spark; if(!s||!s.close||s.close.length<2) return "";
+  const W=680,H=110,P=6;
+  let vals=[...s.low,...s.high];
+  Object.values(s.series).forEach(a=>vals=vals.concat(a.filter(v=>v!==null)));
+  Object.values(s.levels).forEach(v=>vals.push(v));
+  vals=vals.filter(v=>v!==null&&isFinite(v));
+  const mn=Math.min(...vals),mx=Math.max(...vals),sp=(mx-mn)||1;
+  const X=i=>P+(W-2*P)*i/(s.close.length-1);
+  const Y=v=>H-P-(H-2*P)*(v-mn)/sp;
+  const path=a=>a.map((v,i)=>v===null?"":`${i&&a[i-1]!==null?"L":"M"}${X(i).toFixed(1)},${Y(v).toFixed(1)}`).join("");
+  let svg=`<path d="${path(s.close)}" fill="none" stroke="var(--amber)" stroke-width="1.6"/>`;
+  let leg=`<span style="color:var(--amber)">— close</span>`;
+  Object.entries(s.series).forEach(([k,a],n)=>{
+    svg+=`<path d="${path(a)}" fill="none" stroke="${SCOL[n%4]}" stroke-width="1.1" opacity=".9"/>`;
+    leg+=`<span style="color:${SCOL[n%4]}">— ${k.replace("_"," ").toUpperCase()}</span>`;});
+  Object.entries(s.levels).forEach(([k,v])=>{
+    svg+=`<line x1="${P}" x2="${W-P}" y1="${Y(v).toFixed(1)}" y2="${Y(v).toFixed(1)}" stroke="var(--muted)" stroke-dasharray="4 4" stroke-width="1"/>`;
+    leg+=`<span>┄ ${k} ${v}</span>`;});
+  return `<div class="spark"><svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img" aria-label="price chart">${svg}</svg>
+    <div class="sleg">${leg}<span style="float:right">${s.dates[0]} → ${s.dates[s.dates.length-1]}</span></div></div>`;
+}
 const fmt=(v,suf="")=>v===null||v===undefined?"—":v+suf;
 const signed=v=>v===null||v===undefined?"—":
   `<span class="${v>=0?"pos":"neg"}">${v>0?"+":""}${v}%</span>`;
@@ -242,6 +285,7 @@ function render(r){
         <span class="mini"><b class="${miss?"neg":"pos"}">${m.conditions_passed}/${m.conditions_total}</b> conditions</span>
       </div>
       <div class="mbody">
+        ${spark(m)}
         <div class="eyebrow">Evidence — why this ${miss?"almost matched":"matched"}</div>
         <div class="ledger">
           ${m.evidence.map(e=>`

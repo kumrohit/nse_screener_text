@@ -241,3 +241,64 @@ def explain_symbol(panel: pd.DataFrame, screen: dict,
                     "passed": bool(passed), "evidence": ev,
                     "values": vals})
     return out
+
+
+# ------------------------------------------------------------ patterns
+def _ex_candle(panel, c, i):
+    lb = int(c.get("lookback", 1))
+    fn = evaluator.PATTERNS[c["pattern"]]
+    hit = next((j for j in range(i, max(0, i - lb + 1) - 1, -1)
+                if fn(panel, j)), None)
+    if hit is None:
+        b = panel.iloc[i]
+        ev = (f"no {c['pattern']} in last {lb} bar(s); latest bar "
+              f"O {_f(b['open'])} H {_f(b['high'])} L {_f(b['low'])} "
+              f"C {_f(b['close'])}")
+        return ev, {}
+    b = panel.iloc[hit]
+    ev = (f"{c['pattern']} on {_date(panel, hit)} — O {_f(b['open'])} "
+          f"H {_f(b['high'])} L {_f(b['low'])} C {_f(b['close'])}")
+    return ev, {"pattern_date": _date(panel, hit)}
+
+
+def _ex_tight_range(panel, c, i):
+    bars = int(c.get("bars", 10))
+    if i - bars + 1 < 0:
+        return "insufficient history", {}
+    win = panel.iloc[i - bars + 1: i + 1]
+    span = _f(100 * (win["high"].max() - win["low"].min())
+              / win["low"].min())
+    ev = (f"{bars}-bar span {span}% "
+          f"({_f(win['low'].min())}–{_f(win['high'].max())}), "
+          f"limit {c['max_range_pct']}%")
+    return ev, {"range_pct": span}
+
+
+def _ex_bb_squeeze(panel, c, i):
+    import numpy as np
+    lb = int(c.get("lookback", 252))
+    hist = panel["bb_width_pct"].iloc[max(0, i - lb + 1): i + 1].dropna()
+    cur = panel["bb_width_pct"].iloc[i]
+    if pd.isna(cur) or len(hist) < 60:
+        return "insufficient bandwidth history", {}
+    pctile = _f(100 * (hist < cur).mean(), 1)
+    ev = (f"bandwidth {_f(cur)}% sits at the {pctile}th percentile of "
+          f"{len(hist)} bars (threshold: bottom {c.get('percentile', 20)}%)")
+    return ev, {"bandwidth_pct": _f(cur), "percentile": pctile}
+
+
+def _ex_flat_base(panel, c, i):
+    ev_r, vals = _ex_tight_range(
+        panel, {"bars": c.get("bars", 20),
+                "max_range_pct": c.get("max_range_pct", 12)}, i)
+    off = panel["pct_from_52w_high"].iloc[i]
+    ev = (f"{ev_r}; close {_f(off, 1)}% from 52-week high "
+          f"(limit −{c.get('max_from_52w_high_pct', 15)}%)")
+    vals["pct_from_52w_high"] = _f(off, 1)
+    return ev, vals
+
+
+_EXPLAINERS.update({
+    "candle": _ex_candle, "tight_range": _ex_tight_range,
+    "bb_squeeze": _ex_bb_squeeze, "flat_base": _ex_flat_base,
+})
