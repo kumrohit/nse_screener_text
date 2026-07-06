@@ -205,6 +205,15 @@ def _ex_rs_percentile(panel, c, i, symbol, cross_section):
     if cross_section is None or symbol not in cross_section.index:
         return "cross-sectional data unavailable", {}
     row = cross_section.loc[symbol]
+    if c.get("basis") == "mom_12_1":
+        val = row["mom_12_1_percentile"]
+        if pd.isna(val):
+            return "insufficient history for 12-1 momentum percentile", {}
+        ev = (f"12-1 momentum {_f(row['mom_12_1'])}% ranks at the "
+              f"{_f(val, 1)}th percentile (threshold {c['op']} "
+              f"{c['value']})")
+        return ev, {"mom_12_1": _f(row["mom_12_1"]),
+                    "mom_12_1_percentile": _f(val, 1)}
     val = row["rs_percentile"]
     if pd.isna(val):
         return "insufficient history for RS percentile", {}
@@ -212,6 +221,18 @@ def _ex_rs_percentile(panel, c, i, symbol, cross_section):
           f"at the {_f(val, 1)}th percentile (threshold {c['op']} "
           f"{c['value']})")
     return ev, {"ret_pct": _f(row["ret_pct"]), "rs_percentile": _f(val, 1)}
+
+
+def _ex_atr_pct_percentile(panel, c, i, symbol, cross_section):
+    if cross_section is None or symbol not in cross_section.index:
+        return "cross-sectional data unavailable", {}
+    row = cross_section.loc[symbol]
+    val = row["atr_percentile"]
+    if pd.isna(val):
+        return "insufficient history for ATR% percentile", {}
+    ev = (f"ATR% {_f(row['atr_pct'])} ranks at the {_f(val, 1)}th "
+          f"volatility percentile (threshold {c['op']} {c['value']})")
+    return ev, {"atr_pct": _f(row["atr_pct"]), "atr_percentile": _f(val, 1)}
 
 
 def _ex_sector_rank(panel, c, i, symbol, cross_section):
@@ -284,13 +305,16 @@ def explain_symbol(panel: pd.DataFrame, screen: dict,
             passed = evaluator.cond_sector(
                 panel, c, i, symbol=symbol, sector_by_symbol=sector_by_symbol)
             ev, vals = _ex_sector(panel, c, i, symbol, sector_by_symbol)
-        elif c["type"] in ("rs_percentile", "sector_rank"):
+        elif c["type"] in ("rs_percentile", "sector_rank",
+                          "atr_pct_percentile"):
             cs = (cross_section or {}).get(int(c.get("window", 63)))
-            fn_eval = (evaluator.cond_rs_percentile
-                      if c["type"] == "rs_percentile"
-                      else evaluator.cond_sector_rank)
-            fn_ex = (_ex_rs_percentile if c["type"] == "rs_percentile"
-                    else _ex_sector_rank)
+            fn_eval = {"rs_percentile": evaluator.cond_rs_percentile,
+                      "sector_rank": evaluator.cond_sector_rank,
+                      "atr_pct_percentile":
+                          evaluator.cond_atr_pct_percentile}[c["type"]]
+            fn_ex = {"rs_percentile": _ex_rs_percentile,
+                     "sector_rank": _ex_sector_rank,
+                     "atr_pct_percentile": _ex_atr_pct_percentile}[c["type"]]
             passed = fn_eval(panel, c, i, symbol=symbol, cross_section=cs)
             ev, vals = fn_ex(panel, c, i, symbol, cs)
         else:

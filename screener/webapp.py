@@ -155,7 +155,8 @@ def presets_list():
     from . import presets
     return [{"id": p["id"], "name": p["name"], "group": p["group"],
              "description": p["description"], "spec": p["spec"],
-             "english": dsl.describe(p["spec"])}
+             "english": dsl.describe(p["spec"]),
+             "evidence": p.get("evidence")}
             for p in presets.PRESETS]
 
 
@@ -366,8 +367,8 @@ def _r(x, nd=2):
 
 
 _PLOTTABLE = {"ema_10", "ema_20", "ema_50", "ema_100", "ema_200",
-              "sma_20", "sma_50", "sma_200", "bb_upper", "bb_lower",
-              "high_52w", "low_52w"}
+              "sma_20", "sma_50", "sma_150", "sma_200", "bb_upper",
+              "bb_lower", "high_52w", "low_52w"}
 _LEVEL_KEYS = ("support", "resistance", "level")
 # Overridable via data/config_local.toml (ROADMAP Item 6) — aliased here
 # since they're referenced throughout this module.

@@ -54,7 +54,8 @@ MAX_MATCHES = 100
 
 # ---------------------------------------------------------------- indicators
 EMA_PERIODS = [10, 20, 50, 100, 200]
-SMA_PERIODS = [20, 50, 200]
+SMA_PERIODS = [20, 50, 150, 200]  # 150 added for the Minervini "stage 2"
+                                   # trend template (ROADMAP Item 9)
 RSI_PERIOD = 14
 ATR_PERIOD = 14
 ADX_PERIOD = 14

@@ -75,10 +75,12 @@ Three ways to define a screen: type it in **plain English** and hit
 **Interpret query** to see exactly how it was understood (plain English +
 the compiled JSON spec, plus any canonical defaults the parser filled in
 that you didn't state explicitly) before running; paste a raw **JSON
-spec**; or pick from the **preset dropdown** — 19 curated screens grouped
+spec**; or pick from the **preset dropdown** — 26 curated screens grouped
 by intent (trend continuation, breakouts, reversals, relative strength,
-bearish), each shown with its rationale and compiled English, no API
-key needed.
+bearish), each shown with its rationale, compiled English, and an
+**evidence tag** (academic / practitioner / mixed) with the literature
+finding and honest caveat behind it — see [LITERATURE.md](LITERATURE.md) —
+no API key needed.
 
 An **as-of date picker** replays any historical date — evaluation, metrics,
 and charts all reflect that date, so you can see exactly what a screen
@@ -178,6 +180,9 @@ python -m screener.cli screen --json '{"logic":"AND","conditions":[
 | "RS above 80" | stock's 3-month return ranks in the 80th percentile of the universe |
 | "market leaders" / "top sector" | stock's sector is in the top 3 by 3-month equal-weight momentum |
 | "lagging sector" | stock's sector is in the bottom 3 by 3-month equal-weight momentum |
+| "12-1 momentum" / "momentum leaders" | 12-month return with the most recent month excluded, ranked as a percentile (Jegadeesh-Titman skip-month construction) |
+| "low volatility stocks" / "high volatility stocks" | ATR% ranked as a percentile across the universe, bottom/top tercile |
+| "stage 2" / "Minervini template" | the full practitioner trend template — see [LITERATURE.md §7](LITERATURE.md) |
 | "up 10% in a month", "between 40 and 60" | explicit numbers pass straight through |
 
 Anything it can't map to the documented vocabulary — P/E ratios, news, "good management" — returns an explicit error instead of a silently wrong screen.
@@ -202,12 +207,12 @@ Unknown keys are flagged and ignored rather than silently doing nothing. The eff
 ## Tests
 
 ```bash
-python -m pytest tests/                    # 137 tests: synthetic series with known answers,
+python -m pytest tests/                    # 157 tests: synthetic series with known answers,
                                            # evidence-layer agreement, web API contract
-python -m tests.golden_harness             # live parser scoring vs 19 hand-verified queries
+python -m tests.golden_harness             # live parser scoring vs 23 hand-verified queries
 ```
 
-CI runs the offline suite on every push. The live harness gates any change to the parser prompt: 19/19 or it doesn't ship (also runnable as a manual GitHub Actions job — `.github/workflows/golden-harness.yml`).
+CI runs the offline suite on every push. The live harness gates any change to the parser prompt: N/N or it doesn't ship (also runnable as a manual GitHub Actions job — `.github/workflows/golden-harness.yml`).
 
 ## Roadmap
 

@@ -79,6 +79,8 @@ def compute_panel(df: pd.DataFrame) -> pd.DataFrame:
         out[f"ema_{n}_slope"] = out[f"ema_{n}"].diff(5)  # 5-bar slope
     for n in config.SMA_PERIODS:
         out[f"sma_{n}"] = sma(c, n)
+        out[f"sma_{n}_slope"] = out[f"sma_{n}"].diff(5)  # 5-bar slope,
+                                   # same convention as the EMA slopes above
 
     out["rsi"] = rsi(c, config.RSI_PERIOD)
     out["atr"] = atr(out, config.ATR_PERIOD)
@@ -105,8 +107,14 @@ def compute_panel(df: pd.DataFrame) -> pd.DataFrame:
     out["pct_from_52w_high"] = 100 * (c / out["high_52w"] - 1)
     out["pct_from_52w_low"] = 100 * (c / out["low_52w"] - 1)
 
-    for n in (5, 21, 63):  # 1w, 1m, 3m
+    for n in (5, 21, 63, 126, 252):  # 1w, 1m, 3m, 6m, 12m
         out[f"roc_{n}"] = 100 * c.pct_change(n)
+
+    # 12-1 momentum (Jegadeesh & Titman 1993, skip-month convention per
+    # Jegadeesh 1990 — see LITERATURE.md §1): the return from 252 bars ago
+    # to 21 bars ago, deliberately excluding the most recent month where
+    # short-term reversal would otherwise cancel the momentum signal.
+    out["mom_12_1"] = 100 * (c.shift(21) / c.shift(252) - 1)
 
     return out
 

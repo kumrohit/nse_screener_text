@@ -189,7 +189,27 @@ def cond_rs_percentile(panel, c, i, symbol: str | None = None,
             "automatically by run_screen/webapp when universe is passed.")
     if symbol not in cross_section.index:
         return False
-    val = cross_section.loc[symbol, "rs_percentile"]
+    col = ("mom_12_1_percentile" if c.get("basis") == "mom_12_1"
+           else "rs_percentile")
+    val = cross_section.loc[symbol, col]
+    if pd.isna(val):
+        return False
+    return _cmp(float(val), c["op"], float(c["value"]))
+
+
+def cond_atr_pct_percentile(panel, c, i, symbol: str | None = None,
+                            cross_section: pd.DataFrame | None = None
+                            ) -> bool:
+    """Cross-sectional ATR% (volatility) percentile — 0 = least volatile
+    stock in the universe on this date. See LITERATURE.md §6."""
+    if cross_section is None:
+        raise RuntimeError(
+            "atr_pct_percentile condition requires the cross-sectional "
+            "pre-pass (screener.cross_section). This is wired up "
+            "automatically by run_screen/webapp when universe is passed.")
+    if symbol not in cross_section.index:
+        return False
+    val = cross_section.loc[symbol, "atr_percentile"]
     if pd.isna(val):
         return False
     return _cmp(float(val), c["op"], float(c["value"]))
@@ -226,7 +246,15 @@ DISPATCH = {
 # Condition types that need cross-symbol context beyond a single panel
 # (universe metadata / the cross-sectional pre-pass) — dispatched
 # specially in evaluate_symbol/explain_symbol rather than via DISPATCH.
-CROSS_SECTIONAL_TYPES = {"sector", "rs_percentile", "sector_rank"}
+CROSS_SECTIONAL_TYPES = {"sector", "rs_percentile", "sector_rank",
+                         "atr_pct_percentile"}
+
+# rs_percentile/sector_rank/atr_pct_percentile all key the cross-section
+# cache by window even though atr_pct_percentile's ranking doesn't depend
+# on it — sharing the key lets a screen combining e.g. rs_percentile and
+# atr_pct_percentile at the same window reuse a single build.
+_CROSS_SECTION_WINDOWED_TYPES = ("rs_percentile", "sector_rank",
+                                 "atr_pct_percentile")
 
 # weekly trend uses the weekly panel's own EMA set
 def _weekly_trend(wpanel, c, i) -> bool:
@@ -281,10 +309,11 @@ def evaluate_symbol(panel: pd.DataFrame, screen: dict,
         if c["type"] == "sector":
             return cond_sector(panel, c, i, symbol=symbol,
                                sector_by_symbol=sector_by_symbol)
-        if c["type"] in ("rs_percentile", "sector_rank"):
+        if c["type"] in _CROSS_SECTION_WINDOWED_TYPES:
             cs = (cross_section or {}).get(int(c.get("window", 63)))
-            fn = cond_rs_percentile if c["type"] == "rs_percentile" \
-                else cond_sector_rank
+            fn = {"rs_percentile": cond_rs_percentile,
+                 "sector_rank": cond_sector_rank,
+                 "atr_pct_percentile": cond_atr_pct_percentile}[c["type"]]
             return fn(panel, c, i, symbol=symbol, cross_section=cs)
         return DISPATCH[c["type"]](panel, c, i)
 
@@ -301,7 +330,7 @@ def _cross_sectional_context(screen: dict, panels: dict[str, pd.DataFrame],
     sector_by_symbol = (universe.set_index("symbol")["industry"]
                         if universe is not None else None)
     windows = {int(c.get("window", 63)) for c in screen["conditions"]
-              if c["type"] in ("rs_percentile", "sector_rank")}
+              if c["type"] in _CROSS_SECTION_WINDOWED_TYPES}
     cross_section = {}
     if windows and universe is not None:
         from . import cross_section as cs_mod

@@ -105,6 +105,12 @@
   .recent-row .cname{font-size:12px}
   .btnsm{font-size:11px;padding:4px 12px}
   .newbadge{background:var(--pass);color:#06251d;font-size:10px;font-weight:700;padding:1px 6px;border-radius:3px;letter-spacing:.04em}
+  .evtag{display:inline-block;font-size:9.5px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;padding:1px 7px;border-radius:3px;margin-left:6px;vertical-align:1px}
+  .evtag.academic{background:var(--pass);color:#06251d}
+  .evtag.mixed{background:var(--amber);color:#161006}
+  .evtag.practitioner{background:var(--line);color:var(--muted)}
+  .evfinding{margin-top:6px}
+  .evcaveat{color:var(--fail);opacity:.85}
   .dropped-row{display:flex;gap:10px;padding:6px 0;border-bottom:1px dashed var(--line);font-size:12.5px}
   .dropped-row .sym{font-size:13px;min-width:80px}
   .foot{margin-top:36px;border-top:1px solid var(--line);padding-top:14px;font-family:var(--sans);font-size:12px;color:var(--muted);line-height:1.7}
@@ -202,7 +208,13 @@ function pickPreset(){
   spec = null;
   $("interp").style.display="none";
   $("btnRun").disabled = false;
-  d.innerHTML = `<b style="color:var(--text)">${p.name}.</b> ${p.description}<br>Compiles to: ${p.english}`;
+  const ev = p.evidence;
+  const evHtml = ev ? `
+    <div class="evfinding">${ev.finding}${ev.sources && ev.sources.length ? ` <span class="mini">(${ev.sources.join("; ")})</span>` : ""}</div>
+    <div class="evcaveat">Caveat: ${ev.caveat}</div>` : "";
+  d.innerHTML = `<b style="color:var(--text)">${p.name}.</b>`
+    + (ev ? `<span class="evtag ${ev.basis}">${ev.basis}</span>` : "")
+    + ` ${p.description}<br>Compiles to: ${p.english}${evHtml}`;
   d.style.display = "block";
 }
 

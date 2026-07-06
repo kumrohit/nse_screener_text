@@ -5,19 +5,23 @@ commits that complete them; anything descoped gets struck through with a
 one-line reason, not silently deleted. Design rationale lives in
 TECHNICAL_DESIGN.md; this file is the *what and in which order*.
 
-Status snapshot: v0.8.0 — **v0.7 track complete** (Items 5 and 6).
-Data layer live-verified (500/500), 20-condition DSL (incl. sector
-filters & cross-sectional relative strength, gap), patterns, 19
-built-in presets + unlimited saved custom screens, web UI with
+Status snapshot: v0.9.0 — **v0.7 track complete** (Items 5 and 6);
+**Item 9 (evidence-based strategy presets) complete**.
+Data layer live-verified (500/500), 21-condition DSL (incl. sector
+filters & cross-sectional relative strength, gap, atr_pct_percentile),
+patterns, 26 built-in presets (all evidence-annotated, see
+LITERATURE.md) + unlimited saved custom screens, web UI with
 evidence trails, sparklines, as-of replay, screen log, CSV export,
 recent-screens replay, data-quality badges, config-hash footer,
 screen diff, full chart modal, watchlist, multi-screen dashboard,
-sortable/filterable results. NSE bhavcopy data layer v2 built and
-validated, running side-by-side (2-week evidence clock started
-2026-07-05); not cut over, nothing reads from it yet. 137 tests
-green, no known failures — `tests/conftest.py` makes the suite
-hermetic (forces demo mode so it passes identically in CI and on a
-dev machine that has already run `backfill`).
+sortable/filterable results, evidence tags on the preset picker.
+NSE bhavcopy data layer v2 built and validated, running side-by-side
+(2-week evidence clock started 2026-07-05); not cut over, nothing
+reads from it yet. 157 tests green, no known failures —
+`tests/conftest.py` makes the suite hermetic (forces demo mode so it
+passes identically in CI and on a dev machine that has already run
+`backfill`). Next up: Item 10 (portfolio allocation engine), then
+Item 11 (UI professional redesign).
 
 ---
 
@@ -298,13 +302,13 @@ assumptions display) driven live against the real server with a
 temporary Playwright harness, not just unit-tested — same discipline as
 Item 4. 23 new tests, 115 total.
 
-## 9. Evidence-based strategy presets (v0.9) — literature-grounded filters
+## 9. Evidence-based strategy presets (v0.9) — literature-grounded filters — done 2026-07-06
 
 Goal: every strategy preset traceable to named evidence, with honest
 caveats. Deliverable order matters: the literature doc comes FIRST and the
 presets implement it — not the reverse.
 
-- [ ] **LITERATURE.md** — the review document. One section per strategy
+- [x] **LITERATURE.md** — the review document. One section per strategy
       family; for each: the canonical papers (full citations), the core
       finding, magnitude/robustness, India-specific evidence where it
       exists, known decay/cost caveats, and the exact DSL mapping chosen.
@@ -334,31 +338,41 @@ presets implement it — not the reverse.
          support, strong survivor-bias risk in its folklore).
       8. *Consolidation breakouts* — existing flat_base; academic
          evidence weak → labelled "practitioner, unvalidated".
-- [ ] **Indicator engine additions** the mappings need: `roc_126`,
-      `roc_252`, `mom_12_1` (return t−252 → t−21), `sma_150` (Minervini
-      template), cross-sectional `atr_pct` percentile (low-vol bucket)
-      added to the pre-pass alongside RS percentile.
-- [ ] **Preset schema extension** — each preset gains an `evidence`
+- [x] **Indicator engine additions** — `roc_126`, `roc_252`, `mom_12_1`
+      (close.shift(21)/close.shift(252) − 1, i.e. return t−252 → t−21),
+      `sma_150` + a slope field for every SMA period (needed for
+      "sma_200 rising"), cross-sectional `atr_pct` percentile added to
+      the pre-pass alongside RS percentile (ranked ascending: 0 = least
+      volatile). `rs_percentile` gained an optional `basis`
+      ("return"|"mom_12_1") rather than adding a separate condition type.
+- [x] **Preset schema extension** — each preset gains an `evidence`
       object: {basis: "academic"|"practitioner"|"mixed", sources: […],
-      finding: str, caveat: str}. UI dropdown shows basis as a small tag;
-      the description panel shows finding + caveat BEFORE the user runs
-      it. Existing 19 presets get annotated too (some will honestly say
-      "no direct evidence; convenience screen").
-- [ ] **New strategy presets (~8)** implementing the families:
-      momentum_12_1_leaders (RS pctile ≥80 on mom_12_1 + liquidity),
-      near_52w_high_ghw (GHW: within 5% of 52w high + RS≥60),
-      tsmom_regime (close>sma_200 + 12m return>0),
-      ma_timing_highvol (Han-Yang-Zhou: trend + ATR pctile ≥70),
-      volume_momentum (Lee-Swaminathan: RS≥70 + vol_ratio trend),
-      lowvol_defensive (ATR pctile ≤30 + close>sma_200),
-      minervini_stage2 (full template: close>sma_50>sma_150>sma_200,
-      sma_200 rising, ≥30% above 52w low, within 25% of 52w high, RS≥70),
-      plus annotations pass on existing presets.
-- [ ] **Golden fixtures + parser vocab** — "momentum leaders", "stage 2",
-      "low volatility stocks", "12-1 momentum" (≥4 fixtures).
-- [ ] **Tests** — synthetic universes where each strategy's target
-      profile is engineered; mom_12_1 skip-month verified against
-      hand-computed values. Docs: design doc §indicators + changelog.
+      finding: str, caveat: str}. UI dropdown shows basis as a small
+      color-coded tag; the description panel shows finding + caveat +
+      sources BEFORE the user runs it (live-verified via Playwright
+      against both an "academic" and a "practitioner" preset). All 19
+      pre-existing presets annotated retroactively — several honestly
+      say "no dedicated academic study reviewed" rather than a
+      manufactured citation. 26 presets total.
+- [x] **New strategy presets (7)** — momentum_12_1_leaders, near_52w_
+      high_ghw, tsmom_regime, ma_timing_highvol, volume_momentum,
+      lowvol_defensive, minervini_stage2, exactly as specced above. Each
+      run against the live 500-symbol store (match counts 36-202,
+      none 0 or 500) in addition to the engineered synthetic tests below.
+- [x] **Golden fixtures + parser vocab** — 4 new fixtures ("12-1
+      momentum leaders", "low volatility stocks", "volatile stocks in an
+      uptrend", "stage 2 setups" — the full 7-condition conjunction).
+      19 → 23 fixtures.
+- [x] **Tests** — 20 new: `mom_12_1`'s skip-month construction verified
+      against hand-computed values and proven to rank differently from a
+      raw-return basis on an engineered spike-in-the-excluded-month case;
+      a 4-symbol volatility-dispersion universe (identical drift, only
+      `band` intraday-range differs) cleanly separates `atr_pct_
+      percentile` into quartiles; each of the 7 new presets checked
+      against an engineered match + an engineered rejection case; every
+      preset's evidence object schema-checked. 137 → 157 tests. Docs:
+      TECHNICAL_DESIGN.md §5/§6a/new §12c + changelog; README test/preset
+      counts and vocab table.
 
 ## 10. Portfolio allocation engine (v0.10)
 

@@ -34,10 +34,11 @@ Condition types and their exact shapes:
 Allowed FIELD values (use exactly these):
 open, high, low, close, volume, ema_10, ema_20, ema_50, ema_100, ema_200,
 ema_10_slope, ema_20_slope, ema_50_slope, ema_100_slope, ema_200_slope,
-sma_20, sma_50, sma_200, rsi, atr, atr_pct, adx, plus_di, minus_di, macd,
-macd_signal, macd_hist, bb_upper, bb_lower, bb_width_pct, vol_avg_20,
-vol_ratio, turnover_cr, high_52w, low_52w, pct_from_52w_high,
-pct_from_52w_low, roc_5, roc_21, roc_63
+sma_20, sma_50, sma_150, sma_200, sma_20_slope, sma_50_slope,
+sma_150_slope, sma_200_slope, rsi, atr, atr_pct, adx, plus_di, minus_di,
+macd, macd_signal, macd_hist, bb_upper, bb_lower, bb_width_pct,
+vol_avg_20, vol_ratio, turnover_cr, high_52w, low_52w, pct_from_52w_high,
+pct_from_52w_low, roc_5, roc_21, roc_63, roc_126, roc_252, mom_12_1
 
 Additional condition types:
 - {"type":"near_support","tolerance_pct":N}
@@ -46,9 +47,17 @@ Additional condition types:
 - {"type":"rel_strength","window":N,"op":OP,"value_pct":N}
 - {"type":"sector","in":[SECTOR,...]} — SECTOR must be one of the exact
   strings below; never invent one.
-- {"type":"rs_percentile","window":N,"op":OP,"value":N} — the stock's
-  own N-bar return, ranked as a percentile (0-100) across the whole
-  universe on the as-of date.
+- {"type":"rs_percentile","window":N,"basis":"return"|"mom_12_1","op":OP,
+  "value":N} — the stock ranked as a percentile (0-100) across the whole
+  universe on the as-of date. basis "return" (default): the stock's own
+  N-bar close return. basis "mom_12_1": the academic 12-1 skip-month
+  momentum construction (return from 252 bars ago to 21 bars ago,
+  excluding the most recent month) — window is ignored when basis is
+  mom_12_1, omit it.
+- {"type":"atr_pct_percentile","op":OP,"value":N} — the stock's ATR%
+  (volatility), ranked as a percentile (0-100) across the whole universe;
+  0 = least volatile. "low volatility" -> op "<=" low value (e.g. 30);
+  "high volatility"/"volatile stocks" -> op ">=" high value (e.g. 70).
 - {"type":"sector_rank","window":N,"top":N} or
   {"type":"sector_rank","window":N,"bottom":N} — true if the stock's
   sector is among the top/bottom N sectors by equal-weight N-bar
@@ -95,6 +104,20 @@ Canonical vocabulary (ALWAYS use these mappings):
   {"type":"sector_rank","window":63,"top":3}
 - "lagging sector" / "weakest sectors" / "bottom sector" ->
   {"type":"sector_rank","window":63,"bottom":3}
+- "12-1 momentum" / "momentum leaders" / "skip-month momentum" ->
+  {"type":"rs_percentile","basis":"mom_12_1","op":">=","value":80}
+- "low volatility stocks" / "low-vol names" ->
+  {"type":"atr_pct_percentile","op":"<=","value":30}
+- "high volatility stocks" / "volatile names" ->
+  {"type":"atr_pct_percentile","op":">=","value":70}
+- "stage 2" / "Minervini template" / "trend template" -> the full
+  conjunction: {"type":"compare","left":"close","op":">","right":"sma_50"},
+  {"type":"compare","left":"sma_50","op":">","right":"sma_150"},
+  {"type":"compare","left":"sma_150","op":">","right":"sma_200"},
+  {"type":"compare","left":"sma_200_slope","op":">","right":0},
+  {"type":"range","field":"pct_from_52w_low","min":30},
+  {"type":"range","field":"pct_from_52w_high","min":-25},
+  {"type":"rs_percentile","window":63,"op":">=","value":70}
 
 Pattern conditions:
 - {"type":"candle","pattern":P,"lookback":N} where P is one of:

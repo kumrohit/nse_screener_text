@@ -48,13 +48,14 @@ KNOWN_FIELDS = {
     "ema_10", "ema_20", "ema_50", "ema_100", "ema_200",
     "ema_10_slope", "ema_20_slope", "ema_50_slope", "ema_100_slope",
     "ema_200_slope",
-    "sma_20", "sma_50", "sma_200",
+    "sma_20", "sma_50", "sma_150", "sma_200",
+    "sma_20_slope", "sma_50_slope", "sma_150_slope", "sma_200_slope",
     "rsi", "atr", "atr_pct", "adx", "plus_di", "minus_di",
     "macd", "macd_signal", "macd_hist",
     "bb_upper", "bb_lower", "bb_width_pct",
     "vol_avg_20", "vol_ratio", "turnover_cr",
     "high_52w", "low_52w", "pct_from_52w_high", "pct_from_52w_low",
-    "roc_5", "roc_21", "roc_63",
+    "roc_5", "roc_21", "roc_63", "roc_126", "roc_252", "mom_12_1",
 }
 
 CONDITION_TYPES = {
@@ -64,7 +65,14 @@ CONDITION_TYPES = {
     "rel_strength",
     "candle", "tight_range", "bb_squeeze", "flat_base",
     "sector", "rs_percentile", "sector_rank", "gap",
+    "atr_pct_percentile",
 }
+
+# Basis a `rs_percentile` condition ranks stocks by — see LITERATURE.md §1.
+# "return": the existing window-bar simple close return (unchanged
+# default). "mom_12_1": Jegadeesh-Titman 12-1 skip-month momentum, ignores
+# `window` (mom_12_1 has a fixed 252/21-bar construction).
+RS_PERCENTILE_BASES = {"return", "mom_12_1"}
 
 # Nifty 500 universe file's exact industry strings (NSE classification).
 # `sector` conditions validate against this so an unmapped adjective fails
@@ -214,6 +222,15 @@ def validate(screen: dict) -> dict:
             _require(c, ["op", "value"])
             if c["op"] not in VALID_OPS:
                 raise DSLValidationError(f"bad op {c['op']!r}")
+            basis = c.get("basis", "return")
+            if basis not in RS_PERCENTILE_BASES:
+                raise DSLValidationError(
+                    f"rs_percentile.basis must be one of "
+                    f"{sorted(RS_PERCENTILE_BASES)}, got {basis!r}")
+        elif ctype == "atr_pct_percentile":
+            _require(c, ["op", "value"])
+            if c["op"] not in VALID_OPS:
+                raise DSLValidationError(f"bad op {c['op']!r}")
         elif ctype == "sector_rank":
             has_top, has_bottom = "top" in c, "bottom" in c
             if has_top == has_bottom:
@@ -328,9 +345,18 @@ def _append_condition(parts: list, c: dict) -> None:
         elif t == "sector":
             parts.append("sector in " + ", ".join(c["in"]))
         elif t == "rs_percentile":
+            if c.get("basis") == "mom_12_1":
+                parts.append(
+                    f"12-1 momentum (12-month return, most recent month "
+                    f"excluded) percentile {c['op']} {c['value']}")
+            else:
+                parts.append(
+                    f"{c.get('window', 63)}-bar relative-strength "
+                    f"percentile {c['op']} {c['value']}")
+        elif t == "atr_pct_percentile":
             parts.append(
-                f"{c.get('window', 63)}-bar relative-strength percentile "
-                f"{c['op']} {c['value']}")
+                f"volatility (ATR%) percentile {c['op']} {c['value']} "
+                f"vs. the universe")
         elif t == "sector_rank":
             w = c.get("window", 63)
             if "top" in c:
@@ -361,7 +387,7 @@ CANON_DEFAULTS = {
     "flat_base": {"bars": 20, "max_range_pct": 12,
                   "max_from_52w_high_pct": 15},
     "tight_range": {"bars": 10},
-    "rs_percentile": {"window": 63},
+    "rs_percentile": {"window": 63, "basis": "return"},
     "sector_rank": {"window": 63},
     "gap": {"min_gap_pct": 2.0, "lookback": 3},
 }

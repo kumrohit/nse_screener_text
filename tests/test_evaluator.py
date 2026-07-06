@@ -22,12 +22,13 @@ from screener.evaluator import evaluate_symbol, run_screen  # noqa: E402
 RNG = np.random.default_rng(42)
 
 
-def _mk_ohlcv(closes: np.ndarray, vol_last_ratio: float = 1.0) -> pd.DataFrame:
+def _mk_ohlcv(closes: np.ndarray, vol_last_ratio: float = 1.0,
+              band: float = 0.004) -> pd.DataFrame:
     n = len(closes)
     dates = pd.bdate_range("2022-01-03", periods=n)
     close = pd.Series(closes, index=dates)
-    high = close * (1 + 0.004)
-    low = close * (1 - 0.004)
+    high = close * (1 + band)
+    low = close * (1 - band)
     openp = close.shift(1).fillna(close.iloc[0])
     vol = pd.Series(1_000_000.0, index=dates)
     vol.iloc[-1] *= vol_last_ratio
@@ -805,12 +806,26 @@ class TestGap:
 class TestPresets:
     def test_all_presets_validate_and_describe(self):
         from screener import presets
-        assert len(presets.PRESETS) >= 19
+        assert len(presets.PRESETS) >= 26
         ids = [p["id"] for p in presets.PRESETS]
         assert len(ids) == len(set(ids))
         for p in presets.PRESETS:
             assert dsl.describe(dsl.validate(p["spec"]))
             assert p["description"] and p["group"]
+
+    def test_evidence_schema(self):
+        """ROADMAP Item 9: every preset carries a well-formed evidence
+        object pointing back to LITERATURE.md — no preset silently
+        skips the annotation pass."""
+        from screener import presets
+        for p in presets.PRESETS:
+            ev = p.get("evidence")
+            assert ev is not None, f"{p['id']} missing evidence"
+            assert ev["basis"] in ("academic", "practitioner", "mixed")
+            assert isinstance(ev["sources"], list)
+            assert ev["basis"] != "academic" or ev["sources"], (
+                f"{p['id']} claims academic basis with no sources")
+            assert ev["finding"] and ev["caveat"]
 
     def test_presets_endpoint_and_screen(self):
         client = TestClient(app)
@@ -1288,3 +1303,275 @@ class TestCrossSectionCache:
         assert len(cs._CACHE) <= cs._CACHE_MAX
         # most recent as_of must still be cached (FIFO evicts oldest)
         assert any(k[1] == dates[-1] for k in cs._CACHE)
+
+
+# ============================================================ ROADMAP Item 9
+# Evidence-based strategy presets: new indicators (mom_12_1, roc_126/252,
+# sma_150(+slope)) and the atr_pct_percentile / rs_percentile-basis
+# cross-sectional conditions they feed.
+class TestMomentumIndicators:
+    def test_mom_12_1_skips_most_recent_month(self):
+        """mom_12_1 must equal the return from t-252 to t-21 — a sharp
+        move in the excluded last-21-bar window must NOT show up in it,
+        while it does show up in roc_21."""
+        n = 300
+        closes = 100 * np.cumprod(1 + np.full(n, 0.001))  # steady drift
+        closes = closes.astype(float)
+        closes[-21:] *= 1.5  # engineered spike inside the skipped month
+        panel = _mk_ohlcv(closes)
+        i = len(panel) - 1
+        expected = 100 * (panel["close"].iloc[i - 21]
+                          / panel["close"].iloc[i - 252] - 1)
+        assert panel["mom_12_1"].iloc[i] == pytest.approx(expected, rel=1e-9)
+        # roc_21 (window return including the spike) must be much larger
+        assert panel["roc_21"].iloc[i] > panel["mom_12_1"].iloc[i] + 10
+
+    def test_mom_12_1_nan_with_insufficient_history(self):
+        panel = _mk_ohlcv(100 * np.cumprod(1 + np.full(200, 0.001)))
+        assert pd.isna(panel["mom_12_1"].iloc[-1])  # needs 252+ bars
+
+    def test_roc_126_252_present_and_correct(self):
+        n = 300
+        closes = 100 * np.cumprod(1 + np.full(n, 0.001))
+        panel = _mk_ohlcv(closes)
+        i = len(panel) - 1
+        for w in (126, 252):
+            expected = 100 * (panel["close"].iloc[i]
+                              / panel["close"].iloc[i - w] - 1)
+            assert panel[f"roc_{w}"].iloc[i] == pytest.approx(expected)
+
+    def test_sma_150_and_slope_present(self):
+        panel = _mk_ohlcv(100 * np.cumprod(1 + np.full(300, 0.001)))
+        assert "sma_150" in panel.columns
+        assert "sma_150_slope" in panel.columns
+        assert "sma_200_slope" in panel.columns
+        # steady uptrend -> both long MAs must be rising
+        assert panel["sma_150_slope"].iloc[-1] > 0
+        assert panel["sma_200_slope"].iloc[-1] > 0
+
+
+def _vol_dispersion_universe():
+    """4 symbols, same drift, deliberately different intraday range
+    (the `band` parameter) so ATR% cleanly separates them into clean
+    quartiles (25/50/75/100th percentile) — unlike _sector_universe,
+    whose fixed 0.4% band makes every symbol's ATR% nearly identical."""
+    n = 300
+    drift = np.full(n, 0.0005)
+    panels = {
+        "CALM": _mk_ohlcv(100 * np.cumprod(1 + drift), band=0.002),
+        "MID": _mk_ohlcv(100 * np.cumprod(1 + drift), band=0.010),
+        "WILD": _mk_ohlcv(100 * np.cumprod(1 + drift), band=0.030),
+        "EXTREME": _mk_ohlcv(100 * np.cumprod(1 + drift), band=0.050),
+    }
+    uni = pd.DataFrame({"symbol": list(panels), "name": list(panels),
+                        "industry": ["Sector A"] * 4})
+    return panels, uni
+
+
+class TestAtrPctPercentile:
+    def test_cross_sectional_ordering(self):
+        panels, uni = _vol_dispersion_universe()
+        df = cross_section.build_cross_section(panels, uni, "latest", 63)
+        assert (df.loc["CALM", "atr_percentile"]
+               < df.loc["MID", "atr_percentile"]
+               < df.loc["WILD", "atr_percentile"]
+               < df.loc["EXTREME", "atr_percentile"])
+
+    def test_condition_low_and_high_vol(self):
+        panels, uni = _vol_dispersion_universe()
+        cs = {63: cross_section.build_cross_section(panels, uni,
+                                                     "latest", 63)}
+        low = {"conditions": [
+            {"type": "atr_pct_percentile", "op": "<=", "value": 40}]}
+        high = {"conditions": [
+            {"type": "atr_pct_percentile", "op": ">=", "value": 60}]}
+        assert evaluate_symbol(panels["CALM"], low, symbol="CALM",
+                               cross_section=cs)
+        assert not evaluate_symbol(panels["WILD"], low, symbol="WILD",
+                                   cross_section=cs)
+        assert evaluate_symbol(panels["WILD"], high, symbol="WILD",
+                               cross_section=cs)
+        assert not evaluate_symbol(panels["CALM"], high, symbol="CALM",
+                                   cross_section=cs)
+
+    def test_requires_cross_section_context(self):
+        panels, _uni = _vol_dispersion_universe()
+        spec = {"conditions": [
+            {"type": "atr_pct_percentile", "op": ">=", "value": 50}]}
+        with pytest.raises(RuntimeError):
+            evaluate_symbol(panels["WILD"], spec)
+
+    def test_explainer(self):
+        from screener import explain
+        panels, uni = _vol_dispersion_universe()
+        cs = {63: cross_section.build_cross_section(panels, uni,
+                                                     "latest", 63)}
+        spec = {"conditions": [
+            {"type": "atr_pct_percentile", "op": ">=", "value": 50}]}
+        ev = explain.explain_symbol(panels["WILD"], spec, symbol="WILD",
+                                    cross_section=cs)
+        assert ev[0]["passed"]
+        assert "percentile" in ev[0]["evidence"]
+
+
+class TestRSPercentileBasis:
+    def test_basis_defaults_to_return(self):
+        c = dsl.validate({"conditions": [
+            {"type": "rs_percentile", "op": ">=", "value": 50}]})
+        # basis is optional on input; canonicalization fills the default.
+        assert dsl.canonicalize_conditions(c["conditions"])[0]["basis"] \
+            == "return"
+
+    def test_rejects_unknown_basis(self):
+        with pytest.raises(dsl.DSLValidationError):
+            dsl.validate({"conditions": [
+                {"type": "rs_percentile", "basis": "nonsense",
+                 "op": ">=", "value": 50}]})
+
+    def test_mom_12_1_basis_ranks_differently_from_return(self):
+        """A symbol with a huge rally confined to the most recent month
+        (excluded from mom_12_1) must rank high on basis='return' but
+        NOT on basis='mom_12_1' — the whole point of the skip-month
+        construction (LITERATURE.md §1)."""
+        n = 300
+        flat = np.full(n, 100.0)
+        spike = flat.copy()
+        spike[-10:] *= 1.6  # confined to the last ~2 weeks
+        steady = 100 * np.cumprod(1 + np.full(n, 0.001))  # real 12-1 mover
+        panels = {"SPIKER": _mk_ohlcv(spike), "STEADY": _mk_ohlcv(steady),
+                  "FLAT": _mk_ohlcv(flat)}
+        uni = pd.DataFrame({"symbol": list(panels), "name": list(panels),
+                           "industry": ["Sector A"] * 3})
+        cs = {63: cross_section.build_cross_section(panels, uni,
+                                                     "latest", 63)}
+        ret_high = {"conditions": [
+            {"type": "rs_percentile", "basis": "return", "window": 63,
+             "op": ">=", "value": 90}]}
+        mom_high = {"conditions": [
+            {"type": "rs_percentile", "basis": "mom_12_1", "op": ">=",
+             "value": 90}]}
+        assert evaluate_symbol(panels["SPIKER"], ret_high, symbol="SPIKER",
+                               cross_section=cs)
+        assert not evaluate_symbol(panels["SPIKER"], mom_high,
+                                   symbol="SPIKER", cross_section=cs)
+        assert evaluate_symbol(panels["STEADY"], mom_high, symbol="STEADY",
+                               cross_section=cs)
+
+    def test_explainer_mom_12_1(self):
+        from screener import explain
+        n = 300
+        steady = 100 * np.cumprod(1 + np.full(n, 0.001))
+        panels = {"A": _mk_ohlcv(steady), "B": _mk_ohlcv(np.full(n, 100.0))}
+        uni = pd.DataFrame({"symbol": ["A", "B"], "name": ["A", "B"],
+                           "industry": ["Sector A", "Sector A"]})
+        cs = {63: cross_section.build_cross_section(panels, uni,
+                                                     "latest", 63)}
+        spec = {"conditions": [
+            {"type": "rs_percentile", "basis": "mom_12_1", "op": ">=",
+             "value": 50}]}
+        ev = explain.explain_symbol(panels["A"], spec, symbol="A",
+                                    cross_section=cs)
+        assert "12-1 momentum" in ev[0]["evidence"]
+
+
+class TestNewStrategyPresets:
+    """Each new preset (ROADMAP Item 9) against an engineered universe
+    where its target profile clearly exists, plus a rejection case."""
+
+    def _leaders_universe(self):
+        n = 300
+        # LEADER: strong steady 12-1 momentum, liquid.
+        leader = 100 * np.cumprod(1 + np.full(n, 0.0035))
+        # LAGGARD: flat, illiquid.
+        laggard = np.full(n, 100.0)
+        panels = {"LEADER": _mk_ohlcv(leader),
+                  "LAGGARD": _mk_ohlcv(laggard)}
+        panels["LAGGARD"]["volume"] = 1_000.0  # tiny turnover
+        panels["LAGGARD"]["turnover_cr"] = (
+            panels["LAGGARD"]["close"] * panels["LAGGARD"]["volume"] / 1e7)
+        uni = pd.DataFrame({"symbol": list(panels), "name": list(panels),
+                           "industry": ["Sector A"] * 2})
+        return panels, uni
+
+    def test_momentum_12_1_leaders(self):
+        from screener import presets
+        panels, uni = self._leaders_universe()
+        spec = presets.get("momentum_12_1_leaders")["spec"]
+        res = run_screen(panels, spec, universe=uni)
+        assert list(res["symbol"]) == ["LEADER"]
+
+    def test_near_52w_high_ghw(self):
+        from screener import presets
+        n = 300
+        near_high = 100 * np.cumprod(1 + np.full(n, 0.003))  # grinds to new highs
+        far_from_high = np.concatenate([
+            100 * np.cumprod(1 + np.full(200, 0.003)),
+            np.full(n - 200, 60.0)])  # crashed and stayed down
+        panels = {"NEARHIGH": _mk_ohlcv(near_high),
+                  "FALLEN": _mk_ohlcv(far_from_high)}
+        uni = pd.DataFrame({"symbol": list(panels), "name": list(panels),
+                           "industry": ["Sector A"] * 2})
+        spec = presets.get("near_52w_high_ghw")["spec"]
+        res = run_screen(panels, spec, universe=uni)
+        assert "NEARHIGH" in set(res["symbol"])
+        assert "FALLEN" not in set(res["symbol"])
+
+    def test_tsmom_regime(self):
+        from screener import presets
+        panel_up = uptrend_pullback_panel()  # close far above sma_200, positive 12m return
+        panel_down = breakdown_panel()
+        spec = dsl.validate(presets.get("tsmom_regime")["spec"])
+        assert evaluate_symbol(panel_up, spec)
+        # breakdown panel still spent most of the year rising then broke
+        # down sharply in the last 8 bars -- roc_252 may still be positive,
+        # so assert on the sideways (flat, no regime) panel instead.
+        assert not evaluate_symbol(sideways_panel(), spec)
+
+    def test_ma_timing_highvol(self):
+        from screener import presets
+        panels, uni = _vol_dispersion_universe()  # CALM/MID/WILD, all uptrends
+        spec = dsl.validate(presets.get("ma_timing_highvol")["spec"])
+        cs = {63: cross_section.build_cross_section(panels, uni,
+                                                     "latest", 63)}
+        assert evaluate_symbol(panels["WILD"], spec, symbol="WILD",
+                               cross_section=cs)
+        assert not evaluate_symbol(panels["CALM"], spec, symbol="CALM",
+                                   cross_section=cs)
+
+    def test_volume_momentum(self):
+        from screener import presets
+        n = 300
+        strong = 100 * np.cumprod(1 + np.full(n, 0.003))
+        panels = {"STRONG": _mk_ohlcv(strong, vol_last_ratio=2.0),
+                  "WEAK": _mk_ohlcv(np.full(n, 100.0))}
+        uni = pd.DataFrame({"symbol": list(panels), "name": list(panels),
+                           "industry": ["Sector A"] * 2})
+        spec = presets.get("volume_momentum")["spec"]
+        res = run_screen(panels, spec, universe=uni)
+        assert list(res["symbol"]) == ["STRONG"]
+
+    def test_lowvol_defensive(self):
+        from screener import presets
+        panels, uni = _vol_dispersion_universe()  # CALM/MID/WILD, all uptrends
+        spec = dsl.validate(presets.get("lowvol_defensive")["spec"])
+        cs = {63: cross_section.build_cross_section(panels, uni,
+                                                     "latest", 63)}
+        assert evaluate_symbol(panels["CALM"], spec, symbol="CALM",
+                               cross_section=cs)
+        assert not evaluate_symbol(panels["WILD"], spec, symbol="WILD",
+                                   cross_section=cs)
+
+    def test_minervini_stage2(self):
+        from screener import presets
+        n = 300
+        # textbook stage-2: steady long grind up, comfortably off the low,
+        # close to the high, all MAs stacked and rising.
+        qualifies = 100 * np.cumprod(1 + np.full(n, 0.0025))
+        panels = {"STAGE2": _mk_ohlcv(qualifies),
+                  "SIDEWAYS": sideways_panel()}
+        uni = pd.DataFrame({"symbol": list(panels), "name": list(panels),
+                           "industry": ["Sector A"] * 2})
+        spec = presets.get("minervini_stage2")["spec"]
+        res = run_screen(panels, spec, universe=uni)
+        assert "STAGE2" in set(res["symbol"])
+        assert "SIDEWAYS" not in set(res["symbol"])
