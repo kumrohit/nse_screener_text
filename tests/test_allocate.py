@@ -255,3 +255,37 @@ class TestStopLevelAndRiskConsistency:
             implied_distance = p["entry"] - p["stop_level"]
             assert p["risk"] == pytest.approx(
                 p["shares"] * implied_distance, rel=1e-2)
+
+
+class TestRationaleHonesty:
+    """The rationale must show the arithmetic that produced the final
+    share count, naming the binding cap when one reduced the position."""
+
+    def _lowvol_setup(self):
+        # tight band -> tiny ATR -> raw risk sizing wants a huge position,
+        # so the 15% position cap is guaranteed to bind
+        panels = {"CALMCO": _panel(100 + np.zeros(400), band=0.003)}
+        return panels, _universe(["CALMCO"], ["IT"])
+
+    def test_capped_rationale_names_the_cap(self):
+        import math
+        panels, uni = self._lowvol_setup()
+        res = allocate.allocate(["CALMCO"], panels, uni,
+                                capital=500000, method="risk", risk_pct=1.0)
+        p = res["positions"][0]
+        raw = math.floor(5000 / (p["entry"] - p["stop_level"]))
+        assert raw > p["shares"], "setup must make the cap bind"
+        assert "position cap" in p["rationale"]
+        assert f"= {raw} shares" in p["rationale"]
+        assert f"effective risk ₹{p['risk']:,.0f}" in p["rationale"]
+
+    def test_uncapped_arithmetic_consistent(self):
+        panels, uni = self._lowvol_setup()
+        # huge capital + tiny risk -> no cap binds
+        res = allocate.allocate(["CALMCO"], panels, uni,
+                                capital=50_000_000, method="risk",
+                                risk_pct=0.01)
+        p = res["positions"][0]
+        assert "→" not in p["rationale"]
+        assert abs(p["risk"] - p["shares"]
+                   * (p["entry"] - p["stop_level"])) < 1

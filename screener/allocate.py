@@ -135,10 +135,16 @@ def _apply_caps_and_build(candidates: list[dict], capital: float,
 
     for c in candidates:
         stop_distance = c.get("stop_distance", 2 * c["atr"])
-        target_value = min(c["target_value"], max_position_value)
+        cap_reason = None
+        target_value = c["target_value"]
+        if target_value > max_position_value:
+            target_value = max_position_value
+            cap_reason = f"{max_position_pct:.0f}% position cap"
         sector = c["sector"]
         room = sector_budget - sector_deployed.get(sector, 0.0)
-        target_value = min(target_value, max(room, 0.0))
+        if target_value > max(room, 0.0):
+            target_value = max(room, 0.0)
+            cap_reason = f"{sector_cap_pct:.0f}% sector cap ({sector})"
         # "risk" sizing computes each position independently off the risk
         # budget, with no built-in aggregate cap — without this, enough
         # positions can individually pass the per-position/sector caps
@@ -146,7 +152,9 @@ def _apply_caps_and_build(candidates: list[dict], capital: float,
         # real gap caught via live 500-symbol testing, not synthetic
         # data: 9 positions capped at ~15% each summed past 100%).
         capital_room = capital - capital_deployed
-        target_value = min(target_value, max(capital_room, 0.0))
+        if target_value > max(capital_room, 0.0):
+            target_value = max(capital_room, 0.0)
+            cap_reason = "remaining capital"
         shares = math.floor(target_value / c["entry"]) if c["entry"] > 0 \
             else 0
         value = shares * c["entry"]
@@ -168,15 +176,29 @@ def _apply_caps_and_build(candidates: list[dict], capital: float,
         sector_deployed[sector] = sector_deployed.get(sector, 0.0) + value
         capital_deployed += value
 
+        # The rationale must show the arithmetic that actually produced
+        # the share count. When a cap binds, the risk formula's raw share
+        # count differs from the final one — say so, and show the
+        # effective (reduced) risk, or the ledger lies.
         if method == "risk":
-            rationale = (f"risk ₹{c['risk_amount']:,.0f} ÷ stop "
-                        f"distance ₹{stop_distance:,.2f} = {shares} "
-                        f"shares = ₹{value:,.0f} "
-                        f"({pct_of_capital:.1f}%)")
+            shares_raw = (math.floor(c["risk_amount"] / stop_distance)
+                          if stop_distance > 0 else 0)
+            base = (f"risk ₹{c['risk_amount']:,.0f} ÷ stop "
+                    f"distance ₹{stop_distance:,.2f} = {shares_raw} shares")
+            if cap_reason and shares < shares_raw:
+                rationale = (f"{base} → {cap_reason} limits to {shares} "
+                             f"shares = ₹{value:,.0f} "
+                             f"({pct_of_capital:.1f}%); effective risk "
+                             f"₹{risk_amt:,.0f}")
+            else:
+                rationale = (f"{base} = ₹{value:,.0f} "
+                             f"({pct_of_capital:.1f}%)")
         else:
             rationale = (f"{c['weight_note']} of ₹{capital:,.0f} ÷ "
                         f"entry ₹{c['entry']:,.2f} = {shares} shares "
-                        f"= ₹{value:,.0f} ({pct_of_capital:.1f}%)")
+                        f"= ₹{value:,.0f} ({pct_of_capital:.1f}%)"
+                        + (f" [reduced by {cap_reason}]"
+                           if cap_reason else ""))
 
         positions.append({
             "symbol": c["symbol"], "sector": sector,
