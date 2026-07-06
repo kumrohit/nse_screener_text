@@ -40,7 +40,7 @@ from fastapi import FastAPI
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 
-from . import config, dsl, evaluator, explain, indicators
+from . import allocate, config, dsl, evaluator, explain, indicators
 
 app = FastAPI(title="NSE Text Screener")
 
@@ -330,6 +330,83 @@ def screen_batch(body: ScreenBatchIn):
                                    if result["diff"] else None),
         })
     return {"rows": rows}
+
+
+class AllocateIn(BaseModel):
+    symbols: list[str]
+    capital: float
+    method: str = "risk"
+    risk_pct: float = 1.0
+    max_positions: int = allocate.DEFAULT_MAX_POSITIONS
+    max_position_pct: float = allocate.DEFAULT_MAX_POSITION_PCT
+    sector_cap_pct: float = allocate.DEFAULT_SECTOR_CAP_PCT
+    min_ticket: float = allocate.DEFAULT_MIN_TICKET
+    as_of: str | None = None
+    spec: dict | None = None  # the screen that produced `symbols`, for the log
+
+
+ALLOCATION_LOG_FILE = config.DATA_DIR / "allocation_log.jsonl"
+
+
+def _log_allocation(body: "AllocateIn", result: dict) -> None:
+    """Sibling to screen_log.jsonl (ROADMAP Item 10) — kept as its own
+    file rather than interleaved into screen_log.jsonl because the
+    schemas genuinely differ (a position table, not a matched-symbol
+    list) and verify.check_screen_log's required-keys check would
+    otherwise have to special-case allocation entries. Same
+    replay-guarantee spirit: spec hash (if the originating screen was
+    passed) + every sizing parameter + the resulting table."""
+    import json as _json
+    import datetime as _dt
+    try:
+        config.DATA_DIR.mkdir(parents=True, exist_ok=True)
+        with open(ALLOCATION_LOG_FILE, "a") as fh:
+            fh.write(_json.dumps({
+                "ts": _dt.datetime.now().isoformat(timespec="seconds"),
+                "spec_hash": dsl.spec_hash(body.spec) if body.spec else None,
+                "symbols": body.symbols, "capital": body.capital,
+                "method": body.method, "risk_pct": body.risk_pct,
+                "max_positions": body.max_positions,
+                "max_position_pct": body.max_position_pct,
+                "sector_cap_pct": body.sector_cap_pct,
+                "min_ticket": body.min_ticket,
+                "as_of": result.get("as_of"),
+                "config_hash": config.config_hash(),
+                "positions": result["positions"],
+                "summary": result["summary"],
+            }) + "\n")
+    except OSError:
+        pass  # logging must never break an allocation response
+
+
+@app.post("/api/allocate")
+def allocate_endpoint(body: AllocateIn):
+    """Turns a ranked symbol list + capital + risk tolerance into
+    integer-share position sizes (ROADMAP Item 10) — a sizing
+    calculator with documented methodology, not a recommendation
+    engine. See allocate.py's module docstring and
+    TECHNICAL_DESIGN.md §12d for the explicit non-goals (no MVO, no
+    Kelly, no return forecasts, no auto-execution)."""
+    st = _load_state()
+    as_of = body.as_of or st["as_of"]
+    try:
+        result = allocate.allocate(
+            body.symbols, st["panels"], st["universe"], body.capital,
+            method=body.method, risk_pct=body.risk_pct,
+            max_positions=body.max_positions,
+            max_position_pct=body.max_position_pct,
+            sector_cap_pct=body.sector_cap_pct,
+            min_ticket=body.min_ticket, as_of=as_of)
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=422)
+    result["as_of"] = as_of
+    result["disclaimer"] = (
+        "This is a position-sizing calculator, not investment advice. "
+        "It has no view on which stocks to buy — only on how much of "
+        "each, given the capital, risk tolerance, and constraints you "
+        "specified.")
+    _log_allocation(body, result)
+    return result
 
 
 @app.post("/api/chart")

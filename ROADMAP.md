@@ -5,8 +5,9 @@ commits that complete them; anything descoped gets struck through with a
 one-line reason, not silently deleted. Design rationale lives in
 TECHNICAL_DESIGN.md; this file is the *what and in which order*.
 
-Status snapshot: v0.9.0 — **v0.7 track complete** (Items 5 and 6);
-**Item 9 (evidence-based strategy presets) complete**.
+Status snapshot: v0.10.0 — **v0.7 track complete** (Items 5 and 6);
+**Item 9 (evidence-based strategy presets) complete**; **Item 10
+(portfolio allocation engine) complete**.
 Data layer live-verified (500/500), 21-condition DSL (incl. sector
 filters & cross-sectional relative strength, gap, atr_pct_percentile),
 patterns, 26 built-in presets (all evidence-annotated, see
@@ -17,11 +18,16 @@ screen diff, full chart modal, watchlist, multi-screen dashboard,
 sortable/filterable results, evidence tags on the preset picker.
 NSE bhavcopy data layer v2 built and validated, running side-by-side
 (2-week evidence clock started 2026-07-05); not cut over, nothing
-reads from it yet. 157 tests green, no known failures —
-`tests/conftest.py` makes the suite hermetic (forces demo mode so it
-passes identically in CI and on a dev machine that has already run
-`backfill`). Next up: Item 10 (portfolio allocation engine), then
-Item 11 (UI professional redesign).
+reads from it yet. Portfolio allocation engine (`allocate.py`,
+`/api/allocate`, an "Allocate" UI panel) sizes any result set into
+integer-share positions via fixed-fractional risk, inverse-volatility,
+or equal weight, with per-position/sector/aggregate-capital caps — the
+aggregate-capital cap was a real gap caught only via live 500-symbol
+testing, fixed and regression-tested before shipping. 182 tests green,
+no known failures — `tests/conftest.py` makes the suite hermetic
+(forces demo mode so it passes identically in CI and on a dev machine
+that has already run `backfill`). Next up: Item 11 (UI professional
+redesign).
 
 ---
 
@@ -374,7 +380,7 @@ presets implement it — not the reverse.
       TECHNICAL_DESIGN.md §5/§6a/new §12c + changelog; README test/preset
       counts and vocab table.
 
-## 10. Portfolio allocation engine (v0.10)
+## 10. Portfolio allocation engine (v0.10) — done 2026-07-06
 
 Turns a result set + capital + risk tolerance into integer-share position
 sizes. It is a *sizing calculator with documented methodology*, not a
@@ -382,46 +388,71 @@ recommendation engine — that framing appears in the UI, the docs, and the
 API response.
 
 **Methodology (decided now, implement as specced):**
-- [ ] **Core: fixed-fractional risk sizing** (Van Tharp / Turtle-style):
+- [x] **Core: fixed-fractional risk sizing** (Van Tharp / Turtle-style):
       per-position risk = capital × risk_per_trade_pct (UI risk presets:
       conservative 0.5% / moderate 1% / aggressive 2%); stop distance =
       2×ATR(14) below entry (consistent with the momentum system's hybrid
       stop); shares = floor(risk ÷ stop_distance); position value capped
       at max_position_pct (default 15%) of capital.
-- [ ] **Alternative mode: inverse-volatility weights** (naive risk
+- [x] **Alternative mode: inverse-volatility weights** (naive risk
       parity) over the selected names, same caps.
-- [ ] **Always-shown baseline: equal weight** — DeMiguel, Garlappi &
+- [x] **Always-shown baseline: equal weight** — DeMiguel, Garlappi &
       Uppal (2009): 1/N is the honest benchmark no optimiser reliably
-      beats out-of-sample on estimated inputs.
-- [ ] **Constraints**: max_positions (default 10, ranked by RS pctile
-      when the screen produces more), sector cap (default ≤30% of
-      deployed capital per industry), integer shares, min ticket ₹5k
-      (skip smaller), explicit cash residual line.
-- [ ] **Explicit non-goals, documented with reasons in the design doc**:
+      beats out-of-sample on estimated inputs. Returned as a `baseline`
+      key alongside risk/inverse_vol results (omitted when the caller
+      already requested equal, to avoid a redundant duplicate).
+- [x] **Constraints**: max_positions (default 10, caller-ranked — the UI
+      uses the current results sort), sector cap (default ≤30% of
+      capital per industry), integer shares, min ticket ₹5k (skip
+      smaller), explicit cash residual line, **plus an aggregate
+      capital cap** — not in the original spec, added after live testing
+      found individually-compliant positions summing past 100% of
+      capital (see below).
+- [x] **Explicit non-goals, documented with reasons in the design doc**:
       NO mean-variance optimisation (estimation error dominates on
       screened subsets — DeMiguel et al), NO Kelly (drawdown profile
       unsuitable for discretionary use), NO return forecasts, NO
       auto-execution. Refusing these is a feature.
-- [ ] **`screener/allocate.py`** — pure function: (matches, panels,
-      universe, capital, params) → allocation table (symbol, method
-      weight, shares, value ₹, risk ₹, stop level, % of capital, sector)
-      + summary (deployed, cash, portfolio risk if all stops hit, largest
-      sector). NaN-ATR names excluded with a stated reason, never sized
-      blind.
-- [ ] **Evidence-trail parity** — per-position sizing rationale string
-      ("risk ₹5,000 ÷ stop distance ₹42.50 = 117 → 117 shares = ₹99,988
-      (9.9%)") in the same ledger style as screen evidence.
-- [ ] **API + UI** — `POST /api/allocate`; results page gains an
-      "Allocate" panel (capital input, risk preset, method toggle,
-      constraint fields) → allocation table + CSV export; allocations
-      appended to the screen log (spec hash + params + table) for the
-      same replay guarantee.
-- [ ] **Tests (≥12)** — invariants: Σvalue ≤ capital; per-position risk ≤
-      specified (integer rounding only downward); sector cap enforced;
-      1-match, 0-match, NaN-ATR, tiny-capital degenerate cases; equal
-      weight vs risk-sized divergence on engineered vol dispersion.
-- [ ] **Disclaimer discipline** — allocation responses carry the
-      not-investment-advice note; README section states scope plainly.
+- [x] **`screener/allocate.py`** — pure function: (ranked symbols, panels,
+      universe, capital, params) → allocation table (symbol, sector,
+      entry, shares, value ₹, % of capital, stop level, risk ₹,
+      rationale) + summary (deployed, cash, portfolio risk if all stops
+      hit, largest sector, n_positions) + excluded-with-reasons list.
+      NaN-ATR names excluded with a stated reason, never sized blind.
+- [x] **Evidence-trail parity** — per-position sizing rationale string
+      ("risk ₹1,000 ÷ stop distance ₹59.65 = 13 shares = ₹14,424
+      (14.4%)") in the same ledger style as screen evidence.
+- [x] **API + UI** — `POST /api/allocate`; results page gained a
+      "💰 allocate" panel (capital input, risk preset, method toggle,
+      constraint fields) → position table + equal-weight baseline table
+      + CSV export; logged to a new `data/allocation_log.jsonl` (spec
+      hash if the originating screen was passed + every sizing param +
+      the table) — a sibling to screen_log.jsonl, kept separate since
+      the schemas genuinely differ. Live-verified via Playwright against
+      the real 500-symbol store (risk method, equal method, custom risk
+      preset toggle, CSV export, panel reset on re-run) — this is what
+      caught the aggregate-capital-cap bug below; screenshots clean, zero
+      console errors.
+- [x] **Bug found via live testing, fixed before shipping**: `risk`
+      sizes each position independently off the risk budget with no
+      built-in awareness of the running total deployed — nine
+      individually-15%-capped, distinct-sector positions summed to
+      ₹104,193 against a ₹100,000 input in a real screen. Fixed by
+      tracking `capital_deployed` the same way `sector_deployed` already
+      was; a dedicated regression test (`TestAggregateCapitalCap`)
+      reproduces it with 9 synthetic same-drift/distinct-sector symbols
+      — the original 4-symbol tests hadn't summed past capital by
+      chance, which is why it shipped past unit tests first.
+- [x] **Tests (21)** — invariants: Σvalue ≤ capital (incl. the regression
+      case above); per-position risk ≤ specified (integer rounding only
+      downward); max-position-pct and sector cap enforced; 0-match,
+      all-missing-panel, NaN-ATR, tiny-capital degenerate cases; equal
+      weight vs risk-sized divergence and inverse-vol favoring calmer
+      names on engineered vol dispersion; baseline presence/absence;
+      stop-level/risk consistency. 182 tests total.
+- [x] **Disclaimer discipline** — allocation responses carry the
+      not-investment-advice note (`result["disclaimer"]`); README states
+      the scope plainly.
 
 ## 11. UI professional redesign (v0.11) — after 9 & 10, so it styles them
 

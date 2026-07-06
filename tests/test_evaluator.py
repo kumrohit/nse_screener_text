@@ -931,6 +931,51 @@ class TestChartEndpoint:
         assert "ema_50" in j["series"]
 
 
+class TestAllocateEndpoint:
+    """ROADMAP Item 10: portfolio allocation engine, API contract."""
+    client = TestClient(app)
+
+    def test_basic_allocation(self):
+        r = self.client.post("/api/allocate", json={
+            "symbols": ["STEADY", "PULLBK", "BRKDWN"],
+            "capital": 100_000, "method": "risk", "risk_pct": 1.0})
+        assert r.status_code == 200
+        j = r.json()
+        assert "positions" in j and "summary" in j and "baseline" in j
+        assert "disclaimer" in j and "not investment advice" in j["disclaimer"]
+
+    def test_equal_method_has_no_baseline_key(self):
+        r = self.client.post("/api/allocate", json={
+            "symbols": ["STEADY", "PULLBK"], "capital": 50_000,
+            "method": "equal"})
+        assert r.status_code == 200
+        assert "baseline" not in r.json()
+
+    def test_invalid_method_422s(self):
+        r = self.client.post("/api/allocate", json={
+            "symbols": ["STEADY"], "capital": 50_000, "method": "mvo"})
+        assert r.status_code == 422
+
+    def test_nonpositive_capital_422s(self):
+        r = self.client.post("/api/allocate", json={
+            "symbols": ["STEADY"], "capital": 0, "method": "risk"})
+        assert r.status_code == 422
+
+    def test_allocation_logged(self, tmp_path, monkeypatch):
+        from screener import webapp
+        monkeypatch.setattr(webapp, "ALLOCATION_LOG_FILE",
+                            tmp_path / "allocation_log.jsonl")
+        self.client.post("/api/allocate", json={
+            "symbols": ["STEADY"], "capital": 20_000, "method": "risk",
+            "spec": {"conditions": [{"type": "trend", "direction": "up"}]}})
+        assert webapp.ALLOCATION_LOG_FILE.exists()
+        import json as _json
+        entry = _json.loads(
+            webapp.ALLOCATION_LOG_FILE.read_text().strip().splitlines()[-1])
+        assert entry["spec_hash"] and entry["capital"] == 20_000
+        assert "positions" in entry and "summary" in entry
+
+
 class TestScreenBatch:
     """ROADMAP Item 5: the morning-view multi-screen dashboard."""
     client = TestClient(app)

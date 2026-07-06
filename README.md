@@ -126,6 +126,13 @@ at once from the **📊 dashboard** — one table of match counts, top-3
 symbols, and new-since-last-run per screen, the morning view. Results
 support client-side **sort** and **sector filter chips** with a sticky
 header, so browsing a hundred matches doesn't mean losing your place.
+**💰 Allocate** turns the current matches into integer-share position
+sizes — capital, a conservative/moderate/aggressive/custom risk preset,
+and a sizing method (fixed-fractional risk, inverse-volatility, or equal
+weight), with the equal-weight baseline always shown alongside for
+comparison. It's a sizing calculator with documented methodology (see
+[TECHNICAL_DESIGN.md §12d](TECHNICAL_DESIGN.md)), not a recommendation
+engine — it has no view on which stocks to buy, only on how much of each.
 
 With no price store yet, the app boots into a labelled 11-stock demo
 universe so everything above is explorable immediately after clone.
@@ -207,8 +214,9 @@ Unknown keys are flagged and ignored rather than silently doing nothing. The eff
 ## Tests
 
 ```bash
-python -m pytest tests/                    # 157 tests: synthetic series with known answers,
-                                           # evidence-layer agreement, web API contract
+python -m pytest tests/                    # 182 tests: synthetic series with known answers,
+                                           # evidence-layer agreement, web API contract,
+                                           # allocation-engine invariants
 python -m tests.golden_harness             # live parser scoring vs 23 hand-verified queries
 ```
 

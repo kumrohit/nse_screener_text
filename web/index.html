@@ -176,8 +176,10 @@
     <div class="cells" id="cells"></div>
     <div style="padding:10px 16px;border-top:1px solid var(--line)">
       <button class="btnsm" id="btnExport" onclick="exportCsv()" type="button">export matches to CSV</button>
+      <button class="btnsm" id="btnAllocate" onclick="toggleAllocate()" type="button">💰 allocate</button>
     </div>
     <div id="diffBox" style="display:none;padding:10px 16px;border-top:1px solid var(--line)"></div>
+    <div id="allocatePanel" style="display:none;padding:10px 16px;border-top:1px solid var(--line)"></div>
   </div>
 
   <div class="results" id="results"></div>
@@ -443,6 +445,143 @@ async function runDashboard(){
           </tr>`).join("")}</tbody>
       </table>`;
   }catch(e){ box.innerHTML=`<div class="empty">${e.message}</div>` }
+}
+
+// ---------------------------------------------------------------- portfolio allocation (ROADMAP Item 10)
+const RISK_PRESETS_UI={conservative:0.5, moderate:1.0, aggressive:2.0};
+let LAST_ALLOCATION=null;
+
+function toggleAllocate(){
+  const p=$("allocatePanel"), opening=p.style.display==="none";
+  p.style.display=opening?"block":"none";
+  $("btnAllocate").textContent=opening?"hide allocate":"💰 allocate";
+  if(opening) renderAllocateForm();
+}
+function renderAllocateForm(){
+  const p=$("allocatePanel");
+  if(!LAST_MATCHES.length){
+    p.innerHTML=`<div class="empty">Run a screen with at least one match first.</div>`;
+    return;
+  }
+  p.innerHTML=`
+    <div class="pdesc" style="display:block;margin-bottom:8px">
+      Position-sizing calculator, not a recommendation engine — it has no view on
+      which stocks to buy, only on how much of each. Ranked in the current
+      results order (best 3-month return first).
+    </div>
+    <div class="row" style="flex-wrap:wrap;gap:10px">
+      <label class="asof">capital &#8377; <input type="number" id="allocCapital" value="100000" min="1" style="width:110px"></label>
+      <label class="asof">risk preset
+        <select id="allocRiskPreset" onchange="onAllocRiskPresetChange()">
+          <option value="conservative">conservative (0.5%)</option>
+          <option value="moderate" selected>moderate (1.0%)</option>
+          <option value="aggressive">aggressive (2.0%)</option>
+          <option value="custom">custom</option>
+        </select>
+      </label>
+      <label class="asof" id="allocCustomRiskWrap" style="display:none">risk % <input type="number" id="allocRiskPct" value="1.0" min="0.1" step="0.1" style="width:70px"></label>
+      <label class="asof">method
+        <select id="allocMethod">
+          <option value="risk" selected>fixed-fractional risk</option>
+          <option value="inverse_vol">inverse-volatility</option>
+          <option value="equal">equal weight (1/N)</option>
+        </select>
+      </label>
+    </div>
+    <div class="row" style="flex-wrap:wrap;gap:10px;margin-top:8px">
+      <label class="asof">max positions <input type="number" id="allocMaxPositions" value="10" min="1" style="width:60px"></label>
+      <label class="asof">max position % <input type="number" id="allocMaxPositionPct" value="15" min="1" style="width:60px"></label>
+      <label class="asof">sector cap % <input type="number" id="allocSectorCapPct" value="30" min="1" style="width:60px"></label>
+      <label class="asof">min ticket &#8377; <input type="number" id="allocMinTicket" value="5000" min="0" style="width:80px"></label>
+      <button class="primary btnsm" onclick="runAllocate()" type="button">run allocation</button>
+    </div>
+    <div id="allocateResults" style="margin-top:12px"></div>`;
+}
+function onAllocRiskPresetChange(){
+  const v=$("allocRiskPreset").value;
+  $("allocCustomRiskWrap").style.display = v==="custom" ? "" : "none";
+}
+async function runAllocate(){
+  const box=$("allocateResults");
+  box.innerHTML=`<div class="pdesc" style="display:block">sizing…</div>`;
+  const preset=$("allocRiskPreset").value;
+  const risk_pct = preset==="custom"
+    ? (parseFloat($("allocRiskPct").value)||1.0) : RISK_PRESETS_UI[preset];
+  const body={
+    symbols: LAST_MATCHES.map(m=>m.symbol),
+    capital: parseFloat($("allocCapital").value)||0,
+    method: $("allocMethod").value,
+    risk_pct,
+    max_positions: parseInt($("allocMaxPositions").value)||10,
+    max_position_pct: parseFloat($("allocMaxPositionPct").value)||15,
+    sector_cap_pct: parseFloat($("allocSectorCapPct").value)||30,
+    min_ticket: parseFloat($("allocMinTicket").value)||0,
+    spec: LAST_SPEC,
+  };
+  try{
+    const j=await api("/api/allocate", body);
+    LAST_ALLOCATION=j;
+    box.innerHTML = renderAllocationResult(j);
+  }catch(e){
+    box.innerHTML=`<div class="empty">${e.message}</div>`;
+  }
+}
+function allocTable(res, title){
+  if(!res.positions.length){
+    return `<div class="pdesc" style="display:block">${title}: no positions sized (see excluded below).</div>`;
+  }
+  const rows = res.positions.map(p=>`
+    <tr style="border-bottom:1px dashed var(--line)">
+      <td style="padding:5px 8px"><b>${p.symbol}</b></td>
+      <td style="padding:5px 8px" class="mini">${p.sector}</td>
+      <td style="padding:5px 8px">&#8377;${fmt(p.entry)}</td>
+      <td style="padding:5px 8px">${p.shares}</td>
+      <td style="padding:5px 8px">&#8377;${fmt(p.value)}</td>
+      <td style="padding:5px 8px">${p.pct_of_capital}%</td>
+      <td style="padding:5px 8px">&#8377;${fmt(p.stop_level)}</td>
+      <td style="padding:5px 8px">&#8377;${fmt(p.risk)}</td>
+    </tr>`).join("");
+  return `
+    <div class="eyebrow" style="margin:10px 0 4px">${title}</div>
+    <table style="width:100%;border-collapse:collapse;font-family:var(--sans);font-size:12px">
+      <thead><tr style="border-bottom:1px solid var(--line);text-align:left;color:var(--muted)">
+        <th style="padding:5px 8px">Symbol</th><th style="padding:5px 8px">Sector</th>
+        <th style="padding:5px 8px">Entry</th><th style="padding:5px 8px">Shares</th>
+        <th style="padding:5px 8px">Value</th><th style="padding:5px 8px">% capital</th>
+        <th style="padding:5px 8px">Stop</th><th style="padding:5px 8px">Risk &#8377;</th>
+      </tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+    <div class="capnote">Deployed &#8377;${fmt(res.summary.deployed)} &middot; cash &#8377;${fmt(res.summary.cash)}
+      &middot; portfolio risk if all stops hit &#8377;${fmt(res.summary.portfolio_risk)}
+      &middot; largest sector ${res.summary.largest_sector||"—"}</div>`;
+}
+function renderAllocationResult(j){
+  const label = j.method==="risk" ? "Fixed-fractional risk"
+    : j.method==="inverse_vol" ? "Inverse-volatility" : "Equal weight";
+  let html = allocTable(j, `${label} sizing`);
+  if(j.baseline){
+    html += allocTable(j.baseline, "Equal-weight baseline (for comparison)");
+  }
+  if(j.excluded && j.excluded.length){
+    html += `<div class="pdesc" style="display:block;margin-top:8px">Excluded: ${
+      j.excluded.map(e=>`${e.symbol} (${e.reason})`).join("; ")}</div>`;
+  }
+  html += `<div class="capnote" style="margin-top:6px">${j.disclaimer}</div>
+    <button class="btnsm" style="margin-top:6px" onclick="exportAllocationCsv()" type="button">export allocation to CSV</button>`;
+  return html;
+}
+function exportAllocationCsv(){
+  if(!LAST_ALLOCATION || !LAST_ALLOCATION.positions.length){
+    err("No allocation to export."); return;
+  }
+  const rows=[["symbol","sector","entry","shares","value","pct_of_capital","stop_level","risk","rationale"]];
+  LAST_ALLOCATION.positions.forEach(p=>rows.push(
+    [p.symbol,p.sector,p.entry,p.shares,p.value,p.pct_of_capital,p.stop_level,p.risk,p.rationale]));
+  const csv=rows.map(r=>r.map(v=>`"${String(v).replace(/"/g,'""')}"`).join(",")).join("\n");
+  const blob=new Blob([csv],{type:"text/csv"});
+  const a=document.createElement("a");
+  a.href=URL.createObjectURL(blob); a.download="allocation.csv"; a.click();
 }
 
 async function init(){
@@ -764,6 +903,9 @@ function render(r){
   LAST_SPEC=r.spec;
   SORT_KEY="ret_3m_desc"; SECTOR_FILTER=null;
   RECENT_LOADED=false; // this run just appended to the log — refetch next open
+  LAST_ALLOCATION=null;
+  $("allocatePanel").style.display="none";
+  $("btnAllocate").textContent="💰 allocate";
 
   const st=r.stats, cells=[
     ["Universe",st.universe],["Liquidity-excluded",st.liquidity_excluded],
