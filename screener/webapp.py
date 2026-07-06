@@ -48,12 +48,20 @@ _state: dict = {}
 _lock = threading.Lock()
 
 
+def _demo_forced() -> bool:
+    """SCREENER_FORCE_DEMO=1 boots demo mode regardless of a local price
+    store — used by the visual-regression suite (web/visual) so its
+    screenshots compare against deterministic synthetic data instead of
+    a real store that drifts every trading day."""
+    return _os.environ.get("SCREENER_FORCE_DEMO", "") not in ("", "0")
+
+
 def _store_mtime() -> float | None:
     """mtime of the file a long-running server must watch for changes.
     None in demo mode (nothing on disk to watch) — kept distinct from
     any real mtime so a demo->live transition is also detected."""
     return (config.PRICE_STORE.stat().st_mtime
-           if config.PRICE_STORE.exists() else None)
+           if config.PRICE_STORE.exists() and not _demo_forced() else None)
 
 
 def _load_state() -> dict:
@@ -67,7 +75,7 @@ def _load_state() -> dict:
         if _state and _state.get("_mtime") == mtime:
             return _state
         _state.clear()
-        if config.PRICE_STORE.exists():
+        if config.PRICE_STORE.exists() and not _demo_forced():
             from . import cross_section, data_ingest, universe as uni_mod
             prices = pd.read_parquet(config.PRICE_STORE)
             latest = data_ingest.assert_fresh(prices)
@@ -108,6 +116,21 @@ class ChartIn(BaseModel):
 @app.get("/")
 def index():
     return FileResponse(config.ROOT / "web" / "index.html")
+
+
+@app.get("/app.css")
+def app_css():
+    """Served as a static file (ROADMAP Item 11 monolith split) rather
+    than inlined in index.html — no build step, no framework, just
+    three files instead of one."""
+    return FileResponse(config.ROOT / "web" / "app.css",
+                        media_type="text/css")
+
+
+@app.get("/app.js")
+def app_js():
+    return FileResponse(config.ROOT / "web" / "app.js",
+                        media_type="application/javascript")
 
 
 @app.get("/api/status")

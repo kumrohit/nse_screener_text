@@ -1,0 +1,12 @@
+{
+  "name": "nse-screener-visual-regression",
+  "private": true,
+  "description": "Playwright screenshot baseline (ROADMAP Item 11) — run against a live `python -m screener.webapp` on port 8501. Not wired into CI: it needs the real app server running, same reason tests.golden_harness needs a live API key and stays manual.",
+  "scripts": {
+    "test": "playwright test",
+    "update": "playwright test --update-snapshots"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.48.0"
+  }
+}

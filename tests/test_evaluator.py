@@ -477,6 +477,31 @@ class TestStaleServerFix:
         finally:
             webapp._state.clear()  # restore demo mode for the rest of the suite
 
+    def test_force_demo_env_var_overrides_real_store(self, tmp_path,
+                                                      monkeypatch):
+        """ROADMAP Item 11: web/visual's screenshot baseline needs
+        deterministic demo data even when a real store exists on disk
+        (as it does on any dev machine that's run `backfill`)."""
+        from screener import config, data_ingest, universe, webapp
+
+        store = tmp_path / "prices.parquet"
+        self._write_store(store, [("2024-01-01", 100.0)] * 15)
+        uni = pd.DataFrame({"symbol": ["ONLY"], "name": ["Only Co"],
+                            "industry": ["Services"]})
+        monkeypatch.setattr(config, "PRICE_STORE", store)
+        monkeypatch.setattr(data_ingest, "assert_fresh",
+                            lambda prices: prices["date"].max())
+        monkeypatch.setattr(universe, "fetch_universe", lambda: uni)
+        monkeypatch.setattr(data_ingest, "load_benchmark", lambda: None)
+        monkeypatch.setenv("SCREENER_FORCE_DEMO", "1")
+
+        webapp._state.clear()
+        try:
+            st = webapp._load_state()
+            assert st["mode"] == "demo"
+        finally:
+            webapp._state.clear()
+
 
 class TestConfigOverrides:
     def test_config_hash_changes_with_override(self, monkeypatch):

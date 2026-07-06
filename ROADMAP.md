@@ -5,9 +5,11 @@ commits that complete them; anything descoped gets struck through with a
 one-line reason, not silently deleted. Design rationale lives in
 TECHNICAL_DESIGN.md; this file is the *what and in which order*.
 
-Status snapshot: v0.10.0 — **v0.7 track complete** (Items 5 and 6);
+Status snapshot: v0.11.0 — **v0.7 track complete** (Items 5 and 6);
 **Item 9 (evidence-based strategy presets) complete**; **Item 10
-(portfolio allocation engine) complete**.
+(portfolio allocation engine) complete**; **Item 11 (UI professional
+redesign) shipped in part** — the sidebar layout restructure is
+explicitly deferred by decision, everything else done.
 Data layer live-verified (500/500), 21-condition DSL (incl. sector
 filters & cross-sectional relative strength, gap, atr_pct_percentile),
 patterns, 26 built-in presets (all evidence-annotated, see
@@ -23,11 +25,16 @@ reads from it yet. Portfolio allocation engine (`allocate.py`,
 integer-share positions via fixed-fractional risk, inverse-volatility,
 or equal weight, with per-position/sector/aggregate-capital caps — the
 aggregate-capital cap was a real gap caught only via live 500-symbol
-testing, fixed and regression-tested before shipping. 182 tests green,
-no known failures — `tests/conftest.py` makes the suite hermetic
-(forces demo mode so it passes identically in CI and on a dev machine
-that has already run `backfill`). Next up: Item 11 (UI professional
-redesign).
+testing, fixed and regression-tested before shipping. UI split into
+`app.css`/`app.js`/`index.html` with a documented design-token system,
+a verified accessibility floor (keyboard-operable end to end, WCAG AA
+contrast), toasts, print/report mode, and a committed Playwright
+visual-regression baseline (`web/visual/`). 183 tests green, no known
+failures — `tests/conftest.py` makes the suite hermetic (forces demo
+mode so it passes identically in CI and on a dev machine that has
+already run `backfill`). Next up: the deferred sidebar layout
+restructure, whenever it's prioritized, or Item 3's bhavcopy cutover
+once its evidence window closes.
 
 ---
 
@@ -454,39 +461,64 @@ API response.
       not-investment-advice note (`result["disclaimer"]`); README states
       the scope plainly.
 
-## 11. UI professional redesign (v0.11) — after 9 & 10, so it styles them
+## 11. UI professional redesign (v0.11) — shipped in part 2026-07-06
 
 Keep the audit-desk identity (ink navy, amber, evidence ledgers) — this is
 a refinement, not a reskin. Elevate craft, don't chase trends.
 
-- [ ] **Split the monolith** — index.html (~1.8k lines) → served static
-      web/app.css, web/app.js, index.html; no build step, no frameworks
-      (offline constraint stands). Pure maintainability refactor first,
-      zero visual change, Playwright screenshots as the no-regression
-      proof.
-- [ ] **Design tokens pass** — full spacing/type scale (4px rhythm,
-      3-size mono scale + 2-size sans), border radii and elevation
-      unified, state colors (hover/focus/active/disabled) defined once;
-      document tokens at the top of app.css.
-- [ ] **Layout architecture** — persistent left sidebar (screen
-      definition: tabs, presets, saved screens, watchlist link, recent
-      runs) + main canvas (stats, results, dashboard); header slims to
-      brand + health strip. Desktop-first, graceful ≥1024px, usable at
-      768px.
-- [ ] **Component polish** — empty states with guidance (first-run,
-      zero-match), loading skeletons instead of spinner text, toasts for
-      save/export/watchlist actions, consistent iconography (inline SVG,
-      one style), refined match-card hierarchy (evidence ledger gets the
-      strongest treatment — it is the product).
-- [ ] **Accessibility floor** — keyboard path through define→run→expand
-      →allocate; visible focus rings; aria-labels on icon buttons;
-      contrast ≥4.5:1 verified for all token pairs.
-- [ ] **Report/print mode** — print stylesheet turning a result set +
-      allocation into a clean shareable page (interpretation, config
-      hash, as-of, evidence summaries); "the PDF is the audit trail".
-- [ ] **Visual regression baseline** — Playwright screenshot suite
-      (define, results, modal, dashboard, allocate, watchlist) committed;
-      future UI commits diff against it.
+- [x] **Split the monolith** — index.html (~960 lines) → served static
+      web/app.css, web/app.js, index.html (~85 lines); three new
+      `@app.get` routes, no build step, no framework. Verified
+      byte-for-byte non-regressive: before/after screenshots pixel-
+      identical.
+- [x] **Design tokens pass** — every spacing/font-size/radius/state
+      value named and documented at the top of app.css. Deliberately
+      value-preserving rather than lossily consolidating: the existing
+      non-4px spacing values and the ~9-size sans scale were kept as
+      named tokens (not force-rounded to "3 mono + 2 sans") since they
+      carry real, load-bearing hierarchy across 10+ surfaces —
+      collapsing them would have been an unreviewed visual regression
+      disguised as a refactor. Mono scale gained one size (12.5/14/
+      16/17px) for the match symbol. Rendered output confirmed
+      pixel-identical to pre-tokens via screenshot comparison.
+- [ ] **Layout architecture** (persistent sidebar + main canvas) —
+      **explicitly deferred by decision** (not struck — still planned),
+      after weighing it as the highest-risk, highest-effort remaining
+      piece (touches every panel: results, stats, watchlist, dashboard,
+      allocate, recent screens) against everything else already shipped
+      this cycle. Revisit as its own scoped effort.
+- [x] **Component polish** (partial, by the same reasoning as above —
+      toasts were the highest-value, lowest-risk piece; skeleton
+      loaders/iconography/card-hierarchy passes deferred alongside the
+      layout work since they're most naturally done together with it):
+      a single reused toast (`role="status"`, `aria-live="polite"`) for
+      previously-silent actions — watchlist add/remove, save/rename/
+      delete a custom screen, CSV export.
+- [x] **Accessibility floor** — match cards, recent-run rows, and sector
+      chips gained `tabindex`/ARIA roles/keyboard activation (a shared
+      `onCardKey()` handler); chart modal gained `role="dialog"`, focus
+      moved to its close button on open and restored to the trigger on
+      close, Escape-to-close; contrast computed via the WCAG
+      relative-luminance formula for every token pair — all already
+      clear 4.5:1, no color changes needed. define→run→expand→allocate
+      verified fully keyboard-operable via a Playwright script driving
+      Tab/Enter/Escape.
+- [x] **Report/print mode** — `@media print` redefines the token
+      palette's colors for a light ink-on-paper scheme (every component
+      already drawing from the tokens adapts for free); interactive
+      chrome hidden, match evidence forced open, the allocate panel's
+      *results* stay visible (only its input controls hide) so a sized
+      allocation prints too, not just the screen. Triggered by a
+      "🖨 print report" button. Live-verified: results/controls
+      correctly shown/hidden under `page.emulateMedia({media:'print'})`.
+- [x] **Visual regression baseline** — `web/visual/` (`@playwright/
+      test`, its own package.json, not wired into CI — needs a live
+      server, same reason as the golden harness): 6 committed baseline
+      screenshots (define, results, modal, dashboard, allocate,
+      watchlist). A new `SCREENER_FORCE_DEMO=1` env var
+      (`webapp._demo_forced()`) boots demo mode for deterministic
+      baselines regardless of a local real store. Verified idempotent
+      across repeated runs.
 
 ## 12. Recurring operations (not one-time)
 

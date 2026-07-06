@@ -134,6 +134,12 @@ comparison. It's a sizing calculator with documented methodology (see
 [TECHNICAL_DESIGN.md §12d](TECHNICAL_DESIGN.md)), not a recommendation
 engine — it has no view on which stocks to buy, only on how much of each.
 
+The whole page is keyboard-operable end to end (define → run → expand a
+match → allocate), the chart modal traps focus and closes on Escape, and
+**🖨 print report** produces a clean, ink-on-paper page for sharing —
+see [TECHNICAL_DESIGN.md §12e](TECHNICAL_DESIGN.md) for the full
+accessibility and design-system notes.
+
 With no price store yet, the app boots into a labelled 11-stock demo
 universe so everything above is explorable immediately after clone.
 
@@ -214,13 +220,15 @@ Unknown keys are flagged and ignored rather than silently doing nothing. The eff
 ## Tests
 
 ```bash
-python -m pytest tests/                    # 182 tests: synthetic series with known answers,
+python -m pytest tests/                    # 183 tests: synthetic series with known answers,
                                            # evidence-layer agreement, web API contract,
                                            # allocation-engine invariants
+cd web/visual && npm test                  # visual regression: 6 baseline screenshots
+                                           # against a live demo-mode server (see below)
 python -m tests.golden_harness             # live parser scoring vs 23 hand-verified queries
 ```
 
-CI runs the offline suite on every push. The live harness gates any change to the parser prompt: N/N or it doesn't ship (also runnable as a manual GitHub Actions job — `.github/workflows/golden-harness.yml`).
+CI runs the offline suite on every push. The live harness gates any change to the parser prompt: N/N or it doesn't ship (also runnable as a manual GitHub Actions job — `.github/workflows/golden-harness.yml`). The visual suite needs a real running server in **demo mode** for deterministic screenshots — `SCREENER_FORCE_DEMO=1 python -m screener.webapp` in one terminal, `cd web/visual && npm install && npx playwright install chromium && npm test` in another; `npm run update` regenerates the committed baseline after an intentional UI change.
 
 ## Roadmap
 

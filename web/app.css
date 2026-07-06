@@ -1,0 +1,211 @@
+  /* ============================================================
+     Design tokens (ROADMAP Item 11) — every spacing, type, radius,
+     elevation, and state value used anywhere below is named here.
+     Add new UI by drawing from this list; add a new token only when
+     none of these already fit. Colors keep the existing audit-desk
+     identity (ink navy + amber) — this pass is a refinement, not a
+     reskin, so accent hues and the panel/line hierarchy are unchanged.
+     ============================================================ */
+  :root{
+    /* --- color --- */
+    --bg:#0B1017; --panel:#111826; --panel2:#0E1420; --line:#1E2836;
+    --text:#D7DEE8; --muted:#7C8798; --amber:#E8A33D; --amber-dim:#8A6524;
+    --pass:#3FBF9F; --fail:#E06060;
+    --mono:"IBM Plex Mono","JetBrains Mono",ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+    --sans:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+
+    /* --- spacing: 4px rhythm. every gap/padding/margin below is one
+       of these — a handful of pre-existing odd values (6/9/10px) are
+       kept as named tokens rather than force-rounded, since they were
+       deliberate visual choices (e.g. tight icon-row gaps), not drift. */
+    --sp-1:4px; --sp-1-5:6px; --sp-2:8px; --sp-2-25:9px; --sp-2-5:10px;
+    --sp-3:12px; --sp-3-5:14px; --sp-4:16px; --sp-4-5:18px; --sp-5:20px;
+    --sp-5-5:22px; --sp-6:24px; --sp-6-5:26px; --sp-7:28px; --sp-7-5:30px;
+    --sp-8:32px; --sp-9:36px; --sp-10:40px;
+
+    /* --- type scale ---
+       mono (code/data — the audit-ledger voice): 4 sizes (data-point
+       emphasis, e.g. the match symbol, needed one more step between
+       body copy and the header).
+       sans (UI chrome — labels, copy, micro-text): kept at the sizes
+       already carrying distinct hierarchy meaning (eyebrow labels vs.
+       body copy vs. dense table micro-text); collapsing these to
+       exactly 2 sizes would flatten a hierarchy that's already
+       load-bearing across ~10 UI surfaces, so this pass names and
+       centralizes them rather than force-reducing the count. */
+    --fs-mono-sm:12.5px; --fs-mono-md:14px; --fs-mono-lg:16px; --fs-mono-xl:17px;
+    --fs-sans-3xs:9.5px; --fs-sans-2xs:10px; --fs-sans-xs:10.5px;
+    --fs-sans-sm:11px; --fs-sans-sm2:11.5px; --fs-sans-md:12px;
+    --fs-sans-md2:12.5px; --fs-sans-lg:13px; --fs-sans-xl:14.5px;
+
+    /* --- radii --- */
+    --radius-sm:3px; --radius-md:4px; --radius-lg:6px; --radius-pill:12px;
+
+    /* --- elevation: this is a flat, ledger-style UI by design (no
+       drop-shadow decoration on ordinary panels) — elevation is
+       reserved for content that floats above the page flow. --- */
+    --elevation-modal: 0 12px 40px rgba(3,6,10,.55);
+
+    /* --- state --- */
+    --hover-brightness: 1.12;
+    --disabled-opacity: .4;
+    --focus-ring: var(--pass);
+  }
+  *{box-sizing:border-box;margin:0}
+  body{background:var(--bg);color:var(--text);font-family:var(--mono);font-size:var(--fs-mono-md);line-height:1.55}
+  .wrap{max-width:1060px;margin:0 auto;padding:var(--sp-7) var(--sp-5) 80px}
+
+  /* header */
+  header{display:flex;justify-content:space-between;align-items:baseline;border-bottom:1px solid var(--line);padding-bottom:var(--sp-3-5);margin-bottom:var(--sp-6-5);flex-wrap:wrap;gap:var(--sp-2)}
+  h1{font-size:var(--fs-mono-xl);font-weight:600;letter-spacing:.04em}
+  h1 .tick{color:var(--amber)}
+  .status{font-family:var(--sans);font-size:var(--fs-sans-sm2);color:var(--muted);letter-spacing:.06em;text-transform:uppercase}
+  .status b{color:var(--text);font-weight:600}
+  .badge{display:inline-block;padding:1px var(--sp-2);border:1px solid var(--amber-dim);color:var(--amber);border-radius:var(--radius-sm);margin-left:var(--sp-2)}
+
+  /* eyebrow labels */
+  .eyebrow{font-family:var(--sans);font-size:var(--fs-sans-xs);letter-spacing:.14em;text-transform:uppercase;color:var(--muted);margin-bottom:var(--sp-2)}
+
+  /* query area */
+  .tabs{display:flex;gap:0;margin-bottom:-1px}
+  .tab{font-family:var(--sans);font-size:var(--fs-sans-md);letter-spacing:.05em;padding:7px var(--sp-4);border:1px solid var(--line);border-bottom:none;background:var(--panel2);color:var(--muted);cursor:pointer;border-radius:var(--radius-md) var(--radius-md) 0 0}
+  .tab.active{background:var(--panel);color:var(--text);border-color:var(--line)}
+  .qbox{background:var(--panel);border:1px solid var(--line);border-radius:0 var(--radius-md) var(--radius-md) var(--radius-md);padding:var(--sp-4)}
+  textarea{width:100%;background:var(--bg);border:1px solid var(--line);border-radius:var(--radius-md);color:var(--text);font-family:var(--mono);font-size:var(--fs-mono-md);padding:var(--sp-3);resize:vertical;min-height:64px}
+  textarea:focus{outline:2px solid var(--amber-dim);outline-offset:1px}
+  .row{display:flex;gap:var(--sp-2-5);margin-top:var(--sp-3);align-items:center;flex-wrap:wrap}
+  button{font-family:var(--sans);font-size:var(--fs-sans-lg);font-weight:600;letter-spacing:.03em;padding:9px var(--sp-5);border-radius:var(--radius-md);border:1px solid var(--amber-dim);background:transparent;color:var(--amber);cursor:pointer}
+  button.primary{background:var(--amber);color:#161006;border-color:var(--amber)}
+  button:hover{filter:brightness(var(--hover-brightness))}
+  button:disabled{opacity:var(--disabled-opacity);cursor:default}
+  button:focus-visible{outline:2px solid var(--focus-ring);outline-offset:2px}
+  select{background:var(--bg);border:1px solid var(--line);border-radius:var(--radius-md);color:var(--text);font-family:var(--sans);font-size:var(--fs-sans-md2);padding:7px var(--sp-2-5);min-width:280px;max-width:100%}
+  select:focus{outline:2px solid var(--amber-dim)}
+  select:focus-visible{outline:2px solid var(--focus-ring)}
+  .asof{font-family:var(--sans);font-size:var(--fs-sans-md);color:var(--muted);display:flex;align-items:center;gap:var(--sp-1-5)}
+  .asof input{background:var(--bg);border:1px solid var(--line);border-radius:var(--radius-md);color:var(--text);font-family:var(--mono);font-size:var(--fs-sans-md2);padding:6px var(--sp-2);color-scheme:dark}
+  .asof input:focus-visible{outline:2px solid var(--focus-ring)}
+  .spark{margin-top:var(--sp-3-5);background:var(--panel2);border:1px solid var(--line);border-radius:var(--radius-md);padding:var(--sp-2) var(--sp-2-5) 4px}
+  .spark svg{display:block;width:100%;height:120px}
+  .sleg{font-family:var(--sans);font-size:var(--fs-sans-xs);color:var(--muted);letter-spacing:.05em;margin-top:2px}
+  .sleg span{margin-right:var(--sp-3)}
+  .pdesc{font-family:var(--sans);font-size:var(--fs-sans-md);color:var(--muted);margin-top:var(--sp-2);display:none;border-left:2px solid var(--line);padding-left:var(--sp-2-5)}
+
+  /* interpretation */
+  .interp{margin-top:var(--sp-5-5);background:var(--panel);border:1px solid var(--line);border-left:3px solid var(--amber);border-radius:var(--radius-md);padding:var(--sp-4) var(--sp-4-5);display:none}
+  .interp .english{font-size:var(--fs-sans-xl)}
+  details{margin-top:var(--sp-2-5)}
+  summary{font-family:var(--sans);font-size:var(--fs-sans-sm2);color:var(--muted);cursor:pointer;letter-spacing:.05em}
+  summary:focus-visible{outline:2px solid var(--focus-ring)}
+  pre{background:var(--bg);border:1px solid var(--line);border-radius:var(--radius-md);padding:var(--sp-3);overflow-x:auto;font-size:var(--fs-sans-md2);margin-top:var(--sp-2);color:#A8C6A0}
+
+  /* stats strip */
+  .stats{display:none;margin-top:var(--sp-6-5);border:1px solid var(--line);border-radius:var(--radius-md);overflow:hidden}
+  .stats .cells{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr))}
+  .cell{padding:var(--sp-3) var(--sp-4);border-right:1px solid var(--line);background:var(--panel2)}
+  .cell:last-child{border-right:none}
+  .cell .k{font-family:var(--sans);font-size:var(--fs-sans-xs);letter-spacing:.12em;text-transform:uppercase;color:var(--muted)}
+  .cell .v{font-size:19px;margin-top:2px}
+  .cell .v.hl{color:var(--amber)}
+
+  /* results — the evidence ledger */
+  .results{margin-top:var(--sp-6-5)}
+  .match{border:1px solid var(--line);border-radius:var(--radius-md);margin-bottom:var(--sp-3);background:var(--panel);overflow:hidden}
+  .mhead{display:flex;align-items:baseline;gap:var(--sp-3-5);padding:13px var(--sp-4);cursor:pointer;flex-wrap:wrap}
+  .mhead:hover{background:var(--panel2)}
+  .mhead:focus-visible{outline:2px solid var(--focus-ring);outline-offset:-2px}
+  .sym{font-size:var(--fs-mono-lg);font-weight:700;color:var(--amber);min-width:88px}
+  .cname{font-family:var(--sans);font-size:var(--fs-sans-md2);color:var(--muted);flex:1;min-width:160px}
+  .mini{font-size:var(--fs-sans-md2);color:var(--muted)}
+  .mini b{color:var(--text);font-weight:500}
+  .pos{color:var(--pass)} .neg{color:var(--fail)}
+  .mbody{display:none;border-top:1px solid var(--line);padding:var(--sp-3-5) var(--sp-4) var(--sp-4)}
+  .match.open .mbody{display:block}
+  .ledger{margin-top:var(--sp-1)}
+  .cond{display:grid;grid-template-columns:22px 1fr;gap:0 var(--sp-2-5);padding:9px 0;border-bottom:1px dashed var(--line)}
+  .cond:last-child{border-bottom:none}
+  .mark{font-weight:700}
+  .mark.ok{color:var(--pass)} .mark.no{color:var(--fail)}
+  .cdesc{font-family:var(--sans);font-size:var(--fs-sans-md2);color:var(--text)}
+  .cev{grid-column:2;font-size:var(--fs-sans-md2);color:var(--muted);margin-top:2px}
+  .cev .num{color:#C9D6E4}
+  .mgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:var(--sp-2);margin-top:var(--sp-3-5)}
+  .m{background:var(--panel2);border:1px solid var(--line);border-radius:var(--radius-md);padding:var(--sp-2) var(--sp-2-5)}
+  .m .k{font-family:var(--sans);font-size:var(--fs-sans-2xs);letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}
+  .m .v{font-size:var(--fs-mono-sm);margin-top:1px}
+
+  .sechead{font-family:var(--sans);font-size:var(--fs-sans-md);letter-spacing:.12em;text-transform:uppercase;color:var(--muted);margin:var(--sp-7-5) 0 var(--sp-3);border-bottom:1px solid var(--line);padding-bottom:var(--sp-1-5);display:flex;align-items:center;justify-content:space-between;gap:var(--sp-2-5)}
+  .sechead .toggle{font-family:var(--sans);font-size:var(--fs-sans-sm);padding:3px var(--sp-2-5);border:1px solid var(--line);border-radius:var(--radius-sm);background:transparent;color:var(--muted);cursor:pointer;text-transform:none;letter-spacing:.02em}
+  .sechead .toggle:hover{color:var(--text);border-color:var(--amber-dim)}
+  .sechead .toggle:focus-visible{outline:2px solid var(--focus-ring)}
+  .sechead.sticky{position:sticky;top:0;z-index:5;background:var(--bg)}
+  .capnote{font-family:var(--sans);font-size:var(--fs-sans-sm2);color:var(--muted);margin:-6px 0 var(--sp-3)}
+  .chip{display:inline-block;padding:2px var(--sp-2-25);margin:2px var(--sp-1) 2px 0;border:1px solid var(--line);border-radius:var(--radius-pill);font-family:var(--sans);font-size:var(--fs-sans-xs);cursor:pointer;color:var(--muted)}
+  .chip:hover{border-color:var(--amber-dim);color:var(--text)}
+  .chip:focus-visible{outline:2px solid var(--focus-ring)}
+  .chip.active{background:var(--amber);color:#161006;border-color:var(--amber)}
+  .sortsel{font-family:var(--sans);font-size:var(--fs-sans-sm2);padding:3px var(--sp-1-5);background:var(--bg);color:var(--text);border:1px solid var(--line);border-radius:var(--radius-sm)}
+  .nearmiss .sym{color:var(--muted)}
+  .recent-row{display:flex;gap:var(--sp-3);align-items:baseline;padding:var(--sp-2) var(--sp-2-5);border:1px solid var(--line);border-radius:var(--radius-md);margin-bottom:var(--sp-1-5);cursor:pointer;background:var(--panel2);flex-wrap:wrap}
+  .recent-row:hover{border-color:var(--amber-dim)}
+  .recent-row:focus-visible{outline:2px solid var(--focus-ring)}
+  .recent-row .cname{font-size:var(--fs-sans-md)}
+  .btnsm{font-size:var(--fs-sans-sm);padding:4px var(--sp-3)}
+  .newbadge{background:var(--pass);color:#06251d;font-size:var(--fs-sans-2xs);font-weight:700;padding:1px var(--sp-1-5);border-radius:var(--radius-sm);letter-spacing:.04em}
+  .evtag{display:inline-block;font-size:var(--fs-sans-3xs);font-weight:700;letter-spacing:.05em;text-transform:uppercase;padding:1px var(--sp-2);border-radius:var(--radius-sm);margin-left:var(--sp-1-5);vertical-align:1px}
+  .evtag.academic{background:var(--pass);color:#06251d}
+  .evtag.mixed{background:var(--amber);color:#161006}
+  .evtag.practitioner{background:var(--line);color:var(--muted)}
+  .evfinding{margin-top:var(--sp-1-5)}
+  .evcaveat{color:var(--fail);opacity:.85}
+  .dropped-row{display:flex;gap:var(--sp-2-5);padding:var(--sp-1-5) 0;border-bottom:1px dashed var(--line);font-size:var(--fs-sans-md2)}
+  .dropped-row .sym{font-size:var(--fs-sans-lg);min-width:80px}
+  .foot{margin-top:var(--sp-9);border-top:1px solid var(--line);padding-top:var(--sp-3-5);font-family:var(--sans);font-size:var(--fs-sans-md);color:var(--muted);line-height:1.7}
+  .err{display:none;margin-top:var(--sp-3-5);border:1px solid var(--fail);border-radius:var(--radius-md);background:#1A0F10;color:#F0A8A8;padding:var(--sp-3) var(--sp-3-5);font-family:var(--sans);font-size:var(--fs-sans-lg)}
+  .spin{display:none;color:var(--amber);margin-left:var(--sp-1-5)}
+  @media (prefers-reduced-motion:no-preference){.spin.on{display:inline;animation:b 1s steps(4) infinite}}
+  @keyframes b{0%{content:""}}
+  .empty{padding:var(--sp-6-5);text-align:center;color:var(--muted);font-family:var(--sans);border:1px dashed var(--line);border-radius:var(--radius-md)}
+  .modalOverlay{display:none;position:fixed;inset:0;background:rgba(3,6,10,.72);z-index:50;align-items:center;justify-content:center;padding:var(--sp-5)}
+  .modalBox{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius-lg);max-width:960px;width:100%;max-height:90vh;overflow:auto;padding:var(--sp-4-5) var(--sp-5);box-shadow:var(--elevation-modal)}
+  .modalHead{display:flex;justify-content:space-between;align-items:center;margin-bottom:var(--sp-3);font-family:var(--sans);font-size:var(--fs-sans-xl);font-weight:600}
+
+  /* toast — brief action confirmations (save/watchlist/export/delete),
+     ROADMAP Item 11 component polish. aria-live handles the screen-
+     reader announcement; this only needs to be visually unobtrusive. */
+  .toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%) translateY(12px);
+    background:var(--panel);border:1px solid var(--pass);color:var(--text);
+    padding:var(--sp-2-5) var(--sp-4);border-radius:var(--radius-md);
+    font-family:var(--sans);font-size:var(--fs-sans-lg);
+    box-shadow:var(--elevation-modal);opacity:0;pointer-events:none;
+    transition:opacity .18s ease,transform .18s ease;z-index:100}
+  .toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+  @media (prefers-reduced-motion:reduce){.toast{transition:none}}
+
+  /* print / report mode (ROADMAP Item 11) — "the PDF is the audit
+     trail": redefining the token palette for print (rather than
+     overriding dozens of component selectors individually) means every
+     component that already draws from var(--text)/var(--panel)/etc.
+     adapts for free — the payoff of having done the tokens pass first. */
+  @media print{
+    :root{
+      --bg:#fff; --panel:#fff; --panel2:#f4f4f4; --line:#ccc;
+      --text:#111; --muted:#555; --amber:#8a5a12; --amber-dim:#8a5a12;
+      --pass:#0a6b4f; --fail:#a4222a;
+    }
+    button, .tabs, .row, select, #presetSel, .btnsm, .chip, .sortsel,
+    .toggle, .toast, header .status, #err, #spin,
+    #recentPanel, #myScreensPanel, #dashboardPanel, #watchlistPanel,
+    .modalOverlay{ display:none !important }
+    /* #allocatePanel is deliberately NOT in the list above: if it's
+       open with a computed allocation, the report should include the
+       position table (the whole point of "the PDF is the audit
+       trail" extending to sizing, not just the screen) — only its
+       input controls (already .row/button/select, hidden above) are
+       suppressed. A closed panel keeps its inline display:none either
+       way. */
+    .wrap{max-width:none;padding:0}
+    .match{border:1px solid var(--line);break-inside:avoid}
+    .mbody{display:block !important}
+    .sechead.sticky{position:static}
+  }
