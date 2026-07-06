@@ -298,7 +298,152 @@ assumptions display) driven live against the real server with a
 temporary Playwright harness, not just unit-tested — same discipline as
 Item 4. 23 new tests, 115 total.
 
-## 7. Recurring operations (not one-time)
+## 9. Evidence-based strategy presets (v0.9) — literature-grounded filters
+
+Goal: every strategy preset traceable to named evidence, with honest
+caveats. Deliverable order matters: the literature doc comes FIRST and the
+presets implement it — not the reverse.
+
+- [ ] **LITERATURE.md** — the review document. One section per strategy
+      family; for each: the canonical papers (full citations), the core
+      finding, magnitude/robustness, India-specific evidence where it
+      exists, known decay/cost caveats, and the exact DSL mapping chosen.
+      The vetted family list (implement THESE, do not improvise new ones):
+      1. *Cross-sectional momentum* — Jegadeesh & Titman (1993, JF);
+         12-1 convention (skip the most recent month — short-term
+         reversal, Jegadeesh 1990); Indian confirmation: Sehgal &
+         Balakrishnan (2002), and NSE's own NIFTY200 Momentum 30 index
+         methodology as practitioner corroboration. Caveat: momentum
+         crashes (Daniel & Moskowitz 2016).
+      2. *52-week-high anchoring* — George & Hwang (2004, JF): proximity
+         to the 52w high predicts returns, distinct from momentum.
+      3. *Time-series trend* — Moskowitz, Ooi & Pedersen (2012, JFE);
+         Faber (2007) 10-month SMA rule ≈ 200 DMA regime filter.
+      4. *MA rules* — Brock, Lakonishok & LeBaron (1992, JF); Han, Yang
+         & Zhou (2013): MA timing strongest in high-volatility stocks.
+         Honest caveat: BLL profits attenuated after costs in later
+         samples (Sullivan, Timmermann & White 1999 data-snooping
+         critique) — annotate, don't hide.
+      5. *Volume-confirmed momentum* — Lee & Swaminathan (2000, JF):
+         momentum interacts with turnover.
+      6. *Low-volatility* — Blitz & van Vliet (2007), Ang et al (2006):
+         low-vol stocks earn superior risk-adjusted returns; the
+         defensive bucket.
+      7. *Practitioner trend template* — Minervini/O'Neil stage-2
+         criteria; label explicitly as practitioner (weak academic
+         support, strong survivor-bias risk in its folklore).
+      8. *Consolidation breakouts* — existing flat_base; academic
+         evidence weak → labelled "practitioner, unvalidated".
+- [ ] **Indicator engine additions** the mappings need: `roc_126`,
+      `roc_252`, `mom_12_1` (return t−252 → t−21), `sma_150` (Minervini
+      template), cross-sectional `atr_pct` percentile (low-vol bucket)
+      added to the pre-pass alongside RS percentile.
+- [ ] **Preset schema extension** — each preset gains an `evidence`
+      object: {basis: "academic"|"practitioner"|"mixed", sources: […],
+      finding: str, caveat: str}. UI dropdown shows basis as a small tag;
+      the description panel shows finding + caveat BEFORE the user runs
+      it. Existing 19 presets get annotated too (some will honestly say
+      "no direct evidence; convenience screen").
+- [ ] **New strategy presets (~8)** implementing the families:
+      momentum_12_1_leaders (RS pctile ≥80 on mom_12_1 + liquidity),
+      near_52w_high_ghw (GHW: within 5% of 52w high + RS≥60),
+      tsmom_regime (close>sma_200 + 12m return>0),
+      ma_timing_highvol (Han-Yang-Zhou: trend + ATR pctile ≥70),
+      volume_momentum (Lee-Swaminathan: RS≥70 + vol_ratio trend),
+      lowvol_defensive (ATR pctile ≤30 + close>sma_200),
+      minervini_stage2 (full template: close>sma_50>sma_150>sma_200,
+      sma_200 rising, ≥30% above 52w low, within 25% of 52w high, RS≥70),
+      plus annotations pass on existing presets.
+- [ ] **Golden fixtures + parser vocab** — "momentum leaders", "stage 2",
+      "low volatility stocks", "12-1 momentum" (≥4 fixtures).
+- [ ] **Tests** — synthetic universes where each strategy's target
+      profile is engineered; mom_12_1 skip-month verified against
+      hand-computed values. Docs: design doc §indicators + changelog.
+
+## 10. Portfolio allocation engine (v0.10)
+
+Turns a result set + capital + risk tolerance into integer-share position
+sizes. It is a *sizing calculator with documented methodology*, not a
+recommendation engine — that framing appears in the UI, the docs, and the
+API response.
+
+**Methodology (decided now, implement as specced):**
+- [ ] **Core: fixed-fractional risk sizing** (Van Tharp / Turtle-style):
+      per-position risk = capital × risk_per_trade_pct (UI risk presets:
+      conservative 0.5% / moderate 1% / aggressive 2%); stop distance =
+      2×ATR(14) below entry (consistent with the momentum system's hybrid
+      stop); shares = floor(risk ÷ stop_distance); position value capped
+      at max_position_pct (default 15%) of capital.
+- [ ] **Alternative mode: inverse-volatility weights** (naive risk
+      parity) over the selected names, same caps.
+- [ ] **Always-shown baseline: equal weight** — DeMiguel, Garlappi &
+      Uppal (2009): 1/N is the honest benchmark no optimiser reliably
+      beats out-of-sample on estimated inputs.
+- [ ] **Constraints**: max_positions (default 10, ranked by RS pctile
+      when the screen produces more), sector cap (default ≤30% of
+      deployed capital per industry), integer shares, min ticket ₹5k
+      (skip smaller), explicit cash residual line.
+- [ ] **Explicit non-goals, documented with reasons in the design doc**:
+      NO mean-variance optimisation (estimation error dominates on
+      screened subsets — DeMiguel et al), NO Kelly (drawdown profile
+      unsuitable for discretionary use), NO return forecasts, NO
+      auto-execution. Refusing these is a feature.
+- [ ] **`screener/allocate.py`** — pure function: (matches, panels,
+      universe, capital, params) → allocation table (symbol, method
+      weight, shares, value ₹, risk ₹, stop level, % of capital, sector)
+      + summary (deployed, cash, portfolio risk if all stops hit, largest
+      sector). NaN-ATR names excluded with a stated reason, never sized
+      blind.
+- [ ] **Evidence-trail parity** — per-position sizing rationale string
+      ("risk ₹5,000 ÷ stop distance ₹42.50 = 117 → 117 shares = ₹99,988
+      (9.9%)") in the same ledger style as screen evidence.
+- [ ] **API + UI** — `POST /api/allocate`; results page gains an
+      "Allocate" panel (capital input, risk preset, method toggle,
+      constraint fields) → allocation table + CSV export; allocations
+      appended to the screen log (spec hash + params + table) for the
+      same replay guarantee.
+- [ ] **Tests (≥12)** — invariants: Σvalue ≤ capital; per-position risk ≤
+      specified (integer rounding only downward); sector cap enforced;
+      1-match, 0-match, NaN-ATR, tiny-capital degenerate cases; equal
+      weight vs risk-sized divergence on engineered vol dispersion.
+- [ ] **Disclaimer discipline** — allocation responses carry the
+      not-investment-advice note; README section states scope plainly.
+
+## 11. UI professional redesign (v0.11) — after 9 & 10, so it styles them
+
+Keep the audit-desk identity (ink navy, amber, evidence ledgers) — this is
+a refinement, not a reskin. Elevate craft, don't chase trends.
+
+- [ ] **Split the monolith** — index.html (~1.8k lines) → served static
+      web/app.css, web/app.js, index.html; no build step, no frameworks
+      (offline constraint stands). Pure maintainability refactor first,
+      zero visual change, Playwright screenshots as the no-regression
+      proof.
+- [ ] **Design tokens pass** — full spacing/type scale (4px rhythm,
+      3-size mono scale + 2-size sans), border radii and elevation
+      unified, state colors (hover/focus/active/disabled) defined once;
+      document tokens at the top of app.css.
+- [ ] **Layout architecture** — persistent left sidebar (screen
+      definition: tabs, presets, saved screens, watchlist link, recent
+      runs) + main canvas (stats, results, dashboard); header slims to
+      brand + health strip. Desktop-first, graceful ≥1024px, usable at
+      768px.
+- [ ] **Component polish** — empty states with guidance (first-run,
+      zero-match), loading skeletons instead of spinner text, toasts for
+      save/export/watchlist actions, consistent iconography (inline SVG,
+      one style), refined match-card hierarchy (evidence ledger gets the
+      strongest treatment — it is the product).
+- [ ] **Accessibility floor** — keyboard path through define→run→expand
+      →allocate; visible focus rings; aria-labels on icon buttons;
+      contrast ≥4.5:1 verified for all token pairs.
+- [ ] **Report/print mode** — print stylesheet turning a result set +
+      allocation into a clean shareable page (interpretation, config
+      hash, as-of, evidence summaries); "the PDF is the audit trail".
+- [ ] **Visual regression baseline** — Playwright screenshot suite
+      (define, results, modal, dashboard, allocate, watchlist) committed;
+      future UI commits diff against it.
+
+## 12. Recurring operations (not one-time)
 
 - [ ] Nightly: `update && verify` (cron after 18:30 IST) — set up once,
       then recurring.
@@ -310,7 +455,7 @@ Item 4. 23 new tests, 115 total.
 - [ ] After every feature: README + TECHNICAL_DESIGN + this checklist
       updated in the same commit.
 
-## 8. Deferred (decision recorded, revisit only on demand)
+## 13. Deferred (decision recorded, revisit only on demand)
 
 - Nested boolean logic (AND-of-ORs) — parser reliability + evidence
   readability cost; waits for a real query that needs it.
