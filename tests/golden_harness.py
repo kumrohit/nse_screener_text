@@ -28,33 +28,11 @@ FIXTURES = Path(__file__).parent / "golden_queries.json"
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from screener import dsl  # noqa: E402
 
-DEFAULTS = {
-    "support_at_ma": {"tolerance_pct": 1.5, "lookback": 3},
-    "proximity": {"lookback": 3},
-    "cross": {"lookback": 3},
-    "breakout_resistance": {"lookback": 5, "buffer_pct": 0},
-    "candle": {"lookback": 1},
-    "bb_squeeze": {"percentile": 20, "lookback": 252},
-    "flat_base": {"bars": 20, "max_range_pct": 12,
-                  "max_from_52w_high_pct": 15},
-    "tight_range": {"bars": 10},
-    "rs_percentile": {"window": 63},
-    "sector_rank": {"window": 63},
-    "gap": {"min_gap_pct": 2.0, "lookback": 3},
-}
-
 
 def canon(spec: dict) -> dict:
-    out = {"logic": spec.get("logic", "AND"),
-           "as_of": spec.get("as_of", "latest")}
-    conds = []
-    for c in spec["conditions"]:
-        c = {**DEFAULTS.get(c["type"], {}), **c}
-        c.setdefault("timeframe", "daily")
-        conds.append(c)
-    out["conditions"] = sorted(
-        conds, key=lambda c: json.dumps(c, sort_keys=True))
-    return out
+    return {"logic": spec.get("logic", "AND"),
+           "as_of": spec.get("as_of", "latest"),
+           "conditions": dsl.canonicalize_conditions(spec["conditions"])}
 
 
 def load_fixtures() -> list[dict]:

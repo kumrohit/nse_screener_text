@@ -100,6 +100,11 @@ class ScreenIn(BaseModel):
     spec: dict
 
 
+class ChartIn(BaseModel):
+    symbol: str
+    spec: dict
+
+
 @app.get("/")
 def index():
     return FileResponse(config.ROOT / "web" / "index.html")
@@ -176,12 +181,21 @@ def screen(body: ScreenIn):
         spec = dsl.validate(body.spec)
     except dsl.DSLValidationError as exc:
         return JSONResponse({"error": str(exc)}, status_code=422)
+    return _run_screen(spec)
 
+
+def _run_screen(spec: dict) -> dict:
+    """Everything /api/screen does for one already-validated spec —
+    factored out so /api/screen_batch (ROADMAP Item 5) can run several
+    presets without duplicating the matching/diffing/logging logic."""
     st = _load_state()
     as_of = spec.get("as_of", "latest")
     logic = spec.get("logic", "AND")
     matches, near_misses = [], []
     evaluated = liquidity_excluded = 0
+
+    spec_h = dsl.spec_hash(spec)
+    prior_run = _find_prior_run(spec_h)
 
     sector_by_symbol, cross_section = evaluator._cross_sectional_context(
         spec, st["panels"], st["universe"], as_of)
@@ -241,8 +255,13 @@ def screen(body: ScreenIn):
     matches.sort(key=lambda r: (r["metrics"]["ret_3m_pct"] is None,
                                 -(r["metrics"]["ret_3m_pct"] or 0)))
     near_misses.sort(key=lambda r: -r["conditions_passed"])
+
+    diff = _compute_diff(prior_run, matches, st, spec, as_of,
+                         sector_by_symbol, cross_section)
+
     _log_run(spec, st["as_of"] if as_of == "latest" else as_of,
-             {"matched": len(matches), "evaluated": evaluated}, matches)
+             {"matched": len(matches), "evaluated": evaluated}, matches,
+             spec_h)
     return {
         "english": dsl.describe(spec),
         "spec": spec,
@@ -255,6 +274,7 @@ def screen(body: ScreenIn):
                   "near_misses": len(near_misses)},
         "matches": matches[:MAX_MATCHES],
         "near_misses": near_misses[:15],
+        "diff": diff,
         "methodology": {
             "data": ("Synthetic demo data — run `python -m screener.cli "
                      "backfill` for live Nifty 500 prices"
@@ -268,6 +288,77 @@ def screen(body: ScreenIn):
             "config_hash": config.config_hash(),
         },
     }
+
+
+class ScreenBatchIn(BaseModel):
+    preset_ids: list[str]
+
+
+@app.post("/api/screen_batch")
+def screen_batch(body: ScreenBatchIn):
+    """Run N presets (built-in or "user:<id>" saved screens) in one
+    call — the morning-view dashboard (ROADMAP Item 5): preset x
+    (match count, top-3 symbols, new-since-last-run), without opening
+    each one individually."""
+    from . import presets as presets_mod
+    user_by_id = {u["id"]: u for u in _load_user_presets()}
+
+    rows = []
+    for pid in body.preset_ids:
+        try:
+            if pid.startswith("user:"):
+                u = user_by_id.get(pid[len("user:"):])
+                if u is None:
+                    raise KeyError(pid)
+                name, spec = u["name"], dsl.validate(u["spec"])
+            else:
+                p = presets_mod.get(pid)
+                name, spec = p["name"], dsl.validate(p["spec"])
+        except (KeyError, dsl.DSLValidationError) as exc:
+            rows.append({"preset_id": pid, "name": pid, "error": str(exc)})
+            continue
+
+        result = _run_screen(spec)
+        rows.append({
+            "preset_id": pid,
+            "name": name,
+            "as_of": result["as_of"],
+            "matched": result["stats"]["matched"],
+            "top3": [m["symbol"] for m in result["matches"][:3]],
+            "new_since_last_run": (len(result["diff"]["new"])
+                                   if result["diff"] else None),
+        })
+    return {"rows": rows}
+
+
+@app.post("/api/chart")
+def chart(body: ChartIn):
+    """Full modal chart data for one symbol (ROADMAP Item 5) — lazily
+    fetched on click rather than embedded in every match, since 250
+    bars of OHLCV per row would bloat the main /api/screen payload."""
+    try:
+        spec = dsl.validate(body.spec)
+    except dsl.DSLValidationError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=422)
+
+    st = _load_state()
+    panel = st["panels"].get(body.symbol)
+    if panel is None:
+        return JSONResponse(
+            {"error": f"unknown symbol {body.symbol!r}"}, status_code=404)
+
+    as_of = spec.get("as_of", "latest")
+    i = evaluator._row_at(panel, as_of)
+    if i is None:
+        return JSONResponse(
+            {"error": "no data as of this date"}, status_code=422)
+
+    sector_by_symbol, cross_section = evaluator._cross_sectional_context(
+        spec, st["panels"], st["universe"], as_of)
+    evidence = explain.explain_symbol(
+        panel, spec, as_of, benchmark=st["benchmark"], symbol=body.symbol,
+        sector_by_symbol=sector_by_symbol, cross_section=cross_section)
+    return _chart_payload(panel, spec, evidence, i)
 
 
 def _r(x, nd=2):
@@ -287,13 +378,10 @@ SPARK_BARS = config.SPARK_BARS
 MAX_MATCHES = config.MAX_MATCHES
 
 
-def _spark(panel: pd.DataFrame, spec: dict, evidence: list[dict],
-           i: int) -> dict:
-    """Last SPARK_BARS bars up to the as-of row, plus every series the
-    spec references and every horizontal level the evidence produced —
-    so the mini-chart shows exactly what the conditions looked at."""
-    lo = max(0, i - SPARK_BARS + 1)
-    win = panel.iloc[lo: i + 1]
+def _referenced_fields(spec: dict) -> set[str]:
+    """Every plottable field a spec's conditions reference — shared by
+    the inline spark and the full chart modal, so both overlay exactly
+    what the conditions looked at."""
     fields: set[str] = set()
     for c in spec["conditions"]:
         if c.get("timeframe") == "weekly":
@@ -302,18 +390,57 @@ def _spark(panel: pd.DataFrame, spec: dict, evidence: list[dict],
             v = c.get(k)
             if isinstance(v, str) and v in _PLOTTABLE:
                 fields.add(v)
+    return fields
+
+
+def _evidence_levels(evidence: list[dict]) -> dict:
     levels = {}
     for e in evidence:
         for k in _LEVEL_KEYS:
             if e["values"].get(k) is not None:
                 levels[k] = e["values"][k]
+    return levels
+
+
+def _spark(panel: pd.DataFrame, spec: dict, evidence: list[dict],
+           i: int) -> dict:
+    """Last SPARK_BARS bars up to the as-of row, plus every series the
+    spec references and every horizontal level the evidence produced —
+    so the mini-chart shows exactly what the conditions looked at."""
+    lo = max(0, i - SPARK_BARS + 1)
+    win = panel.iloc[lo: i + 1]
+    fields = _referenced_fields(spec)
     return {
         "dates": [d.strftime("%Y-%m-%d") for d in win.index],
         "close": [_r(v) for v in win["close"]],
         "low": [_r(v) for v in win["low"]],
         "high": [_r(v) for v in win["high"]],
         "series": {f: [_r(v) for v in win[f]] for f in sorted(fields)},
-        "levels": levels,
+        "levels": _evidence_levels(evidence),
+    }
+
+
+CHART_BARS = 250
+
+
+def _chart_payload(panel: pd.DataFrame, spec: dict, evidence: list[dict],
+                   i: int) -> dict:
+    """Full modal chart data (ROADMAP Item 5): CHART_BARS bars with
+    open/high/low/close/volume for candlesticks, the same
+    spec-referenced overlays and evidence levels as the inline spark,
+    just a bigger window."""
+    lo = max(0, i - CHART_BARS + 1)
+    win = panel.iloc[lo: i + 1]
+    fields = _referenced_fields(spec)
+    return {
+        "dates": [d.strftime("%Y-%m-%d") for d in win.index],
+        "open": [_r(v) for v in win["open"]],
+        "high": [_r(v) for v in win["high"]],
+        "low": [_r(v) for v in win["low"]],
+        "close": [_r(v) for v in win["close"]],
+        "volume": [_r(v, 0) for v in win["volume"]],
+        "series": {f: [_r(v) for v in win[f]] for f in sorted(fields)},
+        "levels": _evidence_levels(evidence),
     }
 
 
@@ -350,6 +477,46 @@ def _data_quality_flags(panel: pd.DataFrame, i: int, store_as_of: str
     return flags
 
 
+def _compute_diff(prior_run: dict | None, matches: list, st: dict,
+                  spec: dict, as_of: str, sector_by_symbol, cross_section
+                  ) -> dict | None:
+    """"What changed since last run" (ROADMAP Item 5): symbols new to
+    the match set, and symbols that dropped out — re-explained against
+    *current* data so the UI can show exactly which condition now
+    fails, not just that the symbol vanished."""
+    if prior_run is None:
+        return None
+    prior_matched = set(prior_run.get("matched", []))
+    current_matched = {m["symbol"] for m in matches}
+    new_syms = sorted(current_matched - prior_matched)
+    dropped_syms = sorted(prior_matched - current_matched)
+
+    dropped_detail = []
+    for sym in dropped_syms:
+        panel = st["panels"].get(sym)
+        if panel is None:
+            dropped_detail.append({"symbol": sym,
+                                   "reason": "no longer in the universe"})
+            continue
+        i = evaluator._row_at(panel, as_of)
+        if i is None:
+            dropped_detail.append({"symbol": sym,
+                                   "reason": "no data as of this date"})
+            continue
+        ev = explain.explain_symbol(
+            panel, spec, as_of, benchmark=st["benchmark"], symbol=sym,
+            sector_by_symbol=sector_by_symbol, cross_section=cross_section)
+        failing = [e["description"] for e in ev if not e["passed"]]
+        dropped_detail.append({
+            "symbol": sym,
+            "reason": (f"now fails: {', '.join(failing)}" if failing
+                      else "no longer evaluated (e.g. liquidity gate)"),
+        })
+
+    return {"prior_run_ts": prior_run.get("ts"), "new": new_syms,
+           "dropped": dropped_detail}
+
+
 LOG_FILE = config.DATA_DIR / "screen_log.jsonl"
 ROTATED_LOG_FILE = config.DATA_DIR / "screen_log.rotated.jsonl"
 MAX_LOG_LINES = 5000
@@ -372,7 +539,28 @@ def _rotate_log_if_needed() -> None:
     LOG_FILE.write_text("\n".join(keep) + "\n")
 
 
-def _log_run(spec: dict, as_of: str, stats: dict, matches: list) -> None:
+def _find_prior_run(spec_h: str) -> dict | None:
+    """Most recent screen_log entry with the same spec_hash — i.e. the
+    same screen criteria run before, regardless of as_of — used for
+    screen diffing ("what changed since last run", ROADMAP Item 5).
+    Only checks the active log; missing a diff across a rotation
+    boundary is an acceptable trade-off for a feature about "since
+    yesterday", not deep history."""
+    import json as _json
+    if not LOG_FILE.exists():
+        return None
+    for line in reversed(LOG_FILE.read_text().strip().splitlines()):
+        try:
+            entry = _json.loads(line)
+        except _json.JSONDecodeError:
+            continue
+        if entry.get("spec_hash") == spec_h:
+            return entry
+    return None
+
+
+def _log_run(spec: dict, as_of: str, stats: dict, matches: list,
+             spec_h: str) -> None:
     """Append-only replay trail: spec + data date fully determine results."""
     import json as _json
     import datetime as _dt
@@ -383,6 +571,7 @@ def _log_run(spec: dict, as_of: str, stats: dict, matches: list) -> None:
                 "ts": _dt.datetime.now().isoformat(timespec="seconds"),
                 "as_of": as_of, "spec": spec, "english": dsl.describe(spec),
                 "stats": stats, "config_hash": config.config_hash(),
+                "spec_hash": spec_h,
                 "matched": [m["symbol"] for m in matches],
             }) + "\n")
         _rotate_log_if_needed()
@@ -397,6 +586,191 @@ def screen_log(limit: int = 20):
         return []
     lines = LOG_FILE.read_text().strip().splitlines()[-limit:]
     return [_json.loads(l) for l in reversed(lines)]
+
+
+# ---------------------------------------------------------------- watchlist
+# ROADMAP Item 5: star a match, track whether the tagged setup still holds.
+WATCHLIST_FILE = config.DATA_DIR / "watchlist.jsonl"
+
+
+class WatchlistIn(BaseModel):
+    symbol: str
+    spec: dict
+
+
+@app.post("/api/watchlist")
+def watchlist_add(body: WatchlistIn):
+    import json as _json
+    import datetime as _dt
+    import uuid as _uuid
+    try:
+        spec = dsl.validate(body.spec)
+    except dsl.DSLValidationError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=422)
+
+    st = _load_state()
+    panel = st["panels"].get(body.symbol)
+    if panel is None:
+        return JSONResponse(
+            {"error": f"unknown symbol {body.symbol!r}"}, status_code=404)
+    as_of = spec.get("as_of", "latest")
+    i = evaluator._row_at(panel, as_of)
+    if i is None:
+        return JSONResponse(
+            {"error": "no data as of this date"}, status_code=422)
+
+    entry = {
+        "id": _uuid.uuid4().hex[:12],
+        "ts": _dt.datetime.now().isoformat(timespec="seconds"),
+        "symbol": body.symbol,
+        "tagged_date": str(panel.index[i].date()),
+        "spec": spec,
+        "spec_hash": dsl.spec_hash(spec),
+        "close_at_tag": round(float(panel["close"].iloc[i]), 2),
+    }
+    try:
+        config.DATA_DIR.mkdir(parents=True, exist_ok=True)
+        with open(WATCHLIST_FILE, "a") as fh:
+            fh.write(_json.dumps(entry) + "\n")
+    except OSError:
+        return JSONResponse(
+            {"error": "could not write watchlist"}, status_code=500)
+    return entry
+
+
+@app.get("/api/watchlist")
+def watchlist_list():
+    """Every tagged entry, re-evaluated against *today's* data: current
+    close, % move since tag, and whether the originally-tagged spec
+    still holds — signal-decay tracking, not just a static bookmark."""
+    import json as _json
+    if not WATCHLIST_FILE.exists():
+        return []
+    st = _load_state()
+    out = []
+    for line in WATCHLIST_FILE.read_text().strip().splitlines():
+        if not line:
+            continue
+        entry = _json.loads(line)
+        row = dict(entry)
+        panel = st["panels"].get(entry["symbol"])
+        if panel is None:
+            row.update(current_close=None, move_pct=None, still_holds=None)
+            out.append(row)
+            continue
+        i = evaluator._row_at(panel, "latest")
+        current_close = float(panel["close"].iloc[i])
+        fresh_spec = {**entry["spec"], "as_of": "latest"}
+        sector_by_symbol, cross_section = evaluator._cross_sectional_context(
+            fresh_spec, st["panels"], st["universe"], "latest")
+        still_holds = evaluator.evaluate_symbol(
+            panel, fresh_spec, "latest", benchmark=st["benchmark"],
+            symbol=entry["symbol"], sector_by_symbol=sector_by_symbol,
+            cross_section=cross_section)
+        row.update(
+            current_close=round(current_close, 2),
+            move_pct=round(100 * (current_close / entry["close_at_tag"]
+                                  - 1), 2),
+            still_holds=bool(still_holds),
+        )
+        out.append(row)
+    out.sort(key=lambda r: r["ts"], reverse=True)
+    return out
+
+
+@app.delete("/api/watchlist/{item_id}")
+def watchlist_remove(item_id: str):
+    import json as _json
+    if not WATCHLIST_FILE.exists():
+        return {"removed": False}
+    lines = WATCHLIST_FILE.read_text().strip().splitlines()
+    kept = [ln for ln in lines if _json.loads(ln).get("id") != item_id]
+    removed = len(kept) != len(lines)
+    WATCHLIST_FILE.write_text("\n".join(kept) + ("\n" if kept else ""))
+    return {"removed": removed}
+
+
+# ---------------------------------------------------------------- saved custom screens
+# ROADMAP Item 5: user-authored specs, validated identically to the
+# built-in preset library (rejected on save, not discovered on run).
+USER_PRESETS_FILE = config.DATA_DIR / "user_presets.json"
+
+
+def _load_user_presets() -> list[dict]:
+    import json as _json
+    if not USER_PRESETS_FILE.exists():
+        return []
+    try:
+        return _json.loads(USER_PRESETS_FILE.read_text())
+    except _json.JSONDecodeError:
+        return []
+
+
+def _save_user_presets(items: list[dict]) -> None:
+    import json as _json
+    config.DATA_DIR.mkdir(parents=True, exist_ok=True)
+    USER_PRESETS_FILE.write_text(_json.dumps(items, indent=2))
+
+
+class UserPresetIn(BaseModel):
+    name: str
+    notes: str = ""
+    spec: dict
+
+
+class UserPresetUpdateIn(BaseModel):
+    name: str | None = None
+    notes: str | None = None
+
+
+@app.get("/api/user_presets")
+def user_presets_list():
+    return _load_user_presets()
+
+
+@app.post("/api/user_presets")
+def user_presets_add(body: UserPresetIn):
+    try:
+        spec = dsl.validate(body.spec)
+    except dsl.DSLValidationError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=422)
+    import datetime as _dt
+    import uuid as _uuid
+    items = _load_user_presets()
+    entry = {
+        "id": _uuid.uuid4().hex[:12],
+        "name": body.name,
+        "notes": body.notes,
+        "spec": spec,
+        "english": dsl.describe(spec),
+        "created_ts": _dt.datetime.now().isoformat(timespec="seconds"),
+    }
+    items.append(entry)
+    _save_user_presets(items)
+    return entry
+
+
+@app.put("/api/user_presets/{item_id}")
+def user_presets_update(item_id: str, body: UserPresetUpdateIn):
+    items = _load_user_presets()
+    for it in items:
+        if it["id"] == item_id:
+            if body.name is not None:
+                it["name"] = body.name
+            if body.notes is not None:
+                it["notes"] = body.notes
+            _save_user_presets(items)
+            return it
+    return JSONResponse({"error": "not found"}, status_code=404)
+
+
+@app.delete("/api/user_presets/{item_id}")
+def user_presets_remove(item_id: str):
+    items = _load_user_presets()
+    kept = [it for it in items if it["id"] != item_id]
+    removed = len(kept) != len(items)
+    _save_user_presets(kept)
+    return {"removed": removed}
 
 
 if __name__ == "__main__":

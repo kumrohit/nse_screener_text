@@ -37,6 +37,8 @@ English so the user can confirm the interpretation before trusting results.
 """
 from __future__ import annotations
 
+import hashlib
+import json
 from typing import Any
 
 VALID_OPS = {">", ">=", "<", "<="}
@@ -341,3 +343,46 @@ def _append_condition(parts: list, c: dict) -> None:
                     f"{w}-bar equal-weight momentum")
         if c.get("timeframe") == "weekly" and parts:
             parts[-1] += " [weekly]"
+
+
+# ---------------------------------------------------------------- canonicalisation
+# Optional keys each condition type fills from a canonical default when the
+# caller omits them — used both by the golden-query harness (comparing
+# parser output to a fixture after filling in the same defaults) and by
+# screen-diffing (recognising "the same screen, run again" regardless of
+# key order or which optional defaults were spelled out explicitly).
+CANON_DEFAULTS = {
+    "support_at_ma": {"tolerance_pct": 1.5, "lookback": 3},
+    "proximity": {"lookback": 3},
+    "cross": {"lookback": 3},
+    "breakout_resistance": {"lookback": 5, "buffer_pct": 0},
+    "candle": {"lookback": 1},
+    "bb_squeeze": {"percentile": 20, "lookback": 252},
+    "flat_base": {"bars": 20, "max_range_pct": 12,
+                  "max_from_52w_high_pct": 15},
+    "tight_range": {"bars": 10},
+    "rs_percentile": {"window": 63},
+    "sector_rank": {"window": 63},
+    "gap": {"min_gap_pct": 2.0, "lookback": 3},
+}
+
+
+def canonicalize_conditions(conditions: list[dict]) -> list[dict]:
+    """Defaults filled in, sorted into a stable order."""
+    conds = []
+    for c in conditions:
+        c = {**CANON_DEFAULTS.get(c["type"], {}), **c}
+        c.setdefault("timeframe", "daily")
+        conds.append(c)
+    return sorted(conds, key=lambda c: json.dumps(c, sort_keys=True))
+
+
+def spec_hash(screen: dict) -> str:
+    """Stable hash identifying "the same screen" regardless of as_of,
+    key order, or which optional defaults the caller spelled out
+    explicitly — used to find the previous run of an equivalent spec
+    for screen-diffing ("what changed since last run")."""
+    canon = {"logic": screen.get("logic", "AND"),
+            "conditions": canonicalize_conditions(screen["conditions"])}
+    return hashlib.sha256(
+        json.dumps(canon, sort_keys=True).encode()).hexdigest()[:16]

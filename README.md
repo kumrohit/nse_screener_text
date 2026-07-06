@@ -110,6 +110,21 @@ config hash — a screen is only truly reproducible together with the
 tunables that produced it (see [Configuration](#configuration) below),
 not the spec alone.
 
+A **"since last run" badge** shows what changed for the *same* screen
+criteria (new matches, dropped ones — with the exact condition that now
+fails), regardless of key order or as-of date. Click **full chart ⤢** on
+any match for a large candlestick modal (250 bars, volume, all
+spec-referenced overlays, drag-to-zoom). **☆ watch** a match to track it
+on the **watchlist** — current price, % move since you tagged it, and
+whether the original conditions still hold today. **💾 save as my
+screen** persists any spec you've compiled as a named, reusable preset
+(validated the same way built-ins are, rejected on save not on run) —
+manage or delete them from **manage my screens**. Run several presets
+at once from the **📊 dashboard** — one table of match counts, top-3
+symbols, and new-since-last-run per screen, the morning view. Results
+support client-side **sort** and **sector filter chips** with a sticky
+header, so browsing a hundred matches doesn't mean losing your place.
+
 With no price store yet, the app boots into a labelled 11-stock demo
 universe so everything above is explorable immediately after clone.
 
@@ -187,7 +202,7 @@ Unknown keys are flagged and ignored rather than silently doing nothing. The eff
 ## Tests
 
 ```bash
-python -m pytest tests/                    # 115 tests: synthetic series with known answers,
+python -m pytest tests/                    # 137 tests: synthetic series with known answers,
                                            # evidence-layer agreement, web API contract
 python -m tests.golden_harness             # live parser scoring vs 19 hand-verified queries
 ```

@@ -303,6 +303,39 @@ class TestGoldenOffline:
             canon(spec)  # canonicalisation must not raise
 
 
+class TestSpecHash:
+    """ROADMAP Item 5: screen diffing needs a hash stable under key
+    order and default fill, but sensitive to as_of being excluded (the
+    same criteria run on a later date is still 'the same screen')."""
+
+    def test_stable_under_key_order(self):
+        s1 = {"logic": "AND", "conditions": [
+            {"type": "trend", "direction": "up"},
+            {"type": "range", "field": "rsi", "max": 30}]}
+        s2 = {"conditions": [
+            {"field": "rsi", "max": 30, "type": "range"},
+            {"direction": "up", "type": "trend"}], "logic": "AND"}
+        assert dsl.spec_hash(s1) == dsl.spec_hash(s2)
+
+    def test_stable_under_default_fill(self):
+        s1 = {"conditions": [{"type": "support_at_ma", "ma": "ema_50"}]}
+        s2 = {"conditions": [{"type": "support_at_ma", "ma": "ema_50",
+                              "tolerance_pct": 1.5, "lookback": 3}]}
+        assert dsl.spec_hash(s1) == dsl.spec_hash(s2)
+
+    def test_ignores_as_of(self):
+        s1 = {"conditions": [{"type": "trend", "direction": "up"}],
+             "as_of": "latest"}
+        s2 = {"conditions": [{"type": "trend", "direction": "up"}],
+             "as_of": "2026-01-01"}
+        assert dsl.spec_hash(s1) == dsl.spec_hash(s2)
+
+    def test_differs_for_different_specs(self):
+        s1 = {"conditions": [{"type": "trend", "direction": "up"}]}
+        s2 = {"conditions": [{"type": "trend", "direction": "down"}]}
+        assert dsl.spec_hash(s1) != dsl.spec_hash(s2)
+
+
 # ---------------------------------------------------------------- web/explain
 from fastapi.testclient import TestClient  # noqa: E402
 from screener.webapp import app  # noqa: E402
@@ -842,6 +875,247 @@ class TestAsOfAndSpark:
         assert after == before + 1
         r = self.client.get("/api/log")
         assert r.status_code == 200 and r.json()[0]["matched"]
+
+
+class TestChartEndpoint:
+    """ROADMAP Item 5: full modal chart, lazily fetched per symbol."""
+    client = TestClient(app)
+
+    def test_returns_full_bars_with_ohlcv(self):
+        from screener import webapp
+        spec = {"conditions": [{"type": "trend", "direction": "up"}]}
+        r = self.client.post("/api/chart", json={"symbol": "STEADY",
+                                                  "spec": spec})
+        assert r.status_code == 200
+        j = r.json()
+        assert len(j["dates"]) == len(j["open"]) == len(j["close"]) \
+            == len(j["volume"]) <= webapp.CHART_BARS
+        assert len(j["dates"]) > len(j["dates"][:webapp.SPARK_BARS])
+
+    def test_unknown_symbol_404s(self):
+        r = self.client.post("/api/chart", json={
+            "symbol": "NOPE", "spec": {"conditions": [
+                {"type": "trend", "direction": "up"}]}})
+        assert r.status_code == 404
+
+    def test_bad_spec_rejected(self):
+        r = self.client.post("/api/chart", json={
+            "symbol": "STEADY", "spec": {"conditions": [
+                {"type": "compare", "left": "pe_ratio", "op": ">",
+                 "right": 5}]}})
+        assert r.status_code == 422
+
+    def test_contains_referenced_series_and_levels(self):
+        r = self.client.post("/api/chart", json={"symbol": "PULLBK",
+                                                  "spec": {
+            "logic": "AND", "conditions": [
+                {"type": "support_at_ma", "ma": "ema_50",
+                 "tolerance_pct": 1.5, "lookback": 3},
+                {"type": "trend", "direction": "up"}]}})
+        j = r.json()
+        assert "ema_50" in j["series"]
+
+
+class TestScreenBatch:
+    """ROADMAP Item 5: the morning-view multi-screen dashboard."""
+    client = TestClient(app)
+
+    def test_batch_runs_multiple_presets(self, tmp_path, monkeypatch):
+        from screener import webapp
+        monkeypatch.setattr(webapp, "LOG_FILE", tmp_path / "screen_log.jsonl")
+        r = self.client.post("/api/screen_batch", json={"preset_ids": [
+            "support_50ema_uptrend", "golden_cross"]})
+        assert r.status_code == 200
+        rows = r.json()["rows"]
+        assert {row["preset_id"] for row in rows} == \
+            {"support_50ema_uptrend", "golden_cross"}
+        for row in rows:
+            assert "matched" in row and "top3" in row and "error" not in row
+
+    def test_batch_includes_user_preset(self, tmp_path, monkeypatch):
+        from screener import webapp
+        monkeypatch.setattr(webapp, "LOG_FILE", tmp_path / "screen_log.jsonl")
+        monkeypatch.setattr(webapp, "USER_PRESETS_FILE",
+                            tmp_path / "user_presets.json")
+        spec = {"conditions": [{"type": "trend", "direction": "up"}]}
+        added = self.client.post("/api/user_presets",
+                                 json={"name": "Mine", "spec": spec}).json()
+        r = self.client.post("/api/screen_batch",
+                             json={"preset_ids": [f"user:{added['id']}"]})
+        rows = r.json()["rows"]
+        assert rows[0]["name"] == "Mine" and "error" not in rows[0]
+
+    def test_batch_unknown_preset_reports_error_not_crash(self, tmp_path,
+                                                          monkeypatch):
+        from screener import webapp
+        monkeypatch.setattr(webapp, "LOG_FILE", tmp_path / "screen_log.jsonl")
+        r = self.client.post("/api/screen_batch",
+                             json={"preset_ids": ["does_not_exist"]})
+        assert r.status_code == 200
+        assert "error" in r.json()["rows"][0]
+
+
+class TestUserPresets:
+    """ROADMAP Item 5: saved custom screens — validated identically to
+    built-in presets, rejected on save rather than discovered on run."""
+    client = TestClient(app)
+
+    def test_add_list_update_remove(self, tmp_path, monkeypatch):
+        from screener import webapp
+        monkeypatch.setattr(webapp, "USER_PRESETS_FILE",
+                            tmp_path / "user_presets.json")
+        spec = {"conditions": [{"type": "trend", "direction": "up"}]}
+        r = self.client.post("/api/user_presets",
+                             json={"name": "My uptrend", "notes": "test",
+                                   "spec": spec})
+        assert r.status_code == 200
+        entry = r.json()
+        assert entry["name"] == "My uptrend" and entry["english"]
+
+        items = self.client.get("/api/user_presets").json()
+        assert len(items) == 1 and items[0]["id"] == entry["id"]
+
+        ru = self.client.put(f"/api/user_presets/{entry['id']}",
+                             json={"name": "Renamed"})
+        assert ru.json()["name"] == "Renamed"
+
+        rd = self.client.delete(f"/api/user_presets/{entry['id']}")
+        assert rd.json()["removed"] is True
+        assert self.client.get("/api/user_presets").json() == []
+
+    def test_invalid_spec_rejected_on_save(self, tmp_path, monkeypatch):
+        from screener import webapp
+        monkeypatch.setattr(webapp, "USER_PRESETS_FILE",
+                            tmp_path / "user_presets.json")
+        r = self.client.post("/api/user_presets", json={
+            "name": "Bad", "spec": {"conditions": [
+                {"type": "compare", "left": "pe_ratio", "op": ">",
+                 "right": 5}]}})
+        assert r.status_code == 422
+        assert self.client.get("/api/user_presets").json() == []
+
+    def test_update_unknown_id_404s(self, tmp_path, monkeypatch):
+        from screener import webapp
+        monkeypatch.setattr(webapp, "USER_PRESETS_FILE",
+                            tmp_path / "user_presets.json")
+        r = self.client.put("/api/user_presets/doesnotexist",
+                            json={"name": "x"})
+        assert r.status_code == 404
+
+
+class TestWatchlist:
+    """ROADMAP Item 5: star a match, track signal decay against
+    *today's* data, not a static bookmark."""
+    client = TestClient(app)
+
+    def test_add_and_list_signal_still_holding(self, tmp_path, monkeypatch):
+        from screener import webapp
+        monkeypatch.setattr(webapp, "WATCHLIST_FILE",
+                            tmp_path / "watchlist.jsonl")
+        from screener.webapp import _load_state
+        panel = _load_state()["panels"]["STEADY"]
+        tag_date = str(panel.index[-40].date())
+        spec = {"conditions": [{"type": "trend", "direction": "up"}],
+               "as_of": tag_date}
+        r = self.client.post("/api/watchlist",
+                             json={"symbol": "STEADY", "spec": spec})
+        assert r.status_code == 200
+        assert r.json()["tagged_date"] == tag_date
+
+        j = self.client.get("/api/watchlist").json()
+        row = next(x for x in j if x["symbol"] == "STEADY")
+        assert row["still_holds"] is True   # STEADY never stops trending up
+        assert row["move_pct"] > 0          # and keeps rising since the tag
+
+    def test_signal_decay_detected(self, tmp_path, monkeypatch):
+        from screener import webapp
+        monkeypatch.setattr(webapp, "WATCHLIST_FILE",
+                            tmp_path / "watchlist.jsonl")
+        from screener.webapp import _load_state
+        panel = _load_state()["panels"]["BRKDWN"]
+        # tag well before the engineered breakdown (last 8 bars), when
+        # the uptrend condition genuinely held
+        tag_date = str(panel.index[-20].date())
+        spec = {"conditions": [{"type": "trend", "direction": "up"}],
+               "as_of": tag_date}
+        self.client.post("/api/watchlist",
+                         json={"symbol": "BRKDWN", "spec": spec})
+        j = self.client.get("/api/watchlist").json()
+        row = next(x for x in j if x["symbol"] == "BRKDWN")
+        assert row["still_holds"] is False  # the signal has decayed
+
+    def test_remove(self, tmp_path, monkeypatch):
+        from screener import webapp
+        monkeypatch.setattr(webapp, "WATCHLIST_FILE",
+                            tmp_path / "watchlist.jsonl")
+        spec = {"conditions": [{"type": "trend", "direction": "up"}]}
+        r = self.client.post("/api/watchlist",
+                             json={"symbol": "STEADY", "spec": spec})
+        item_id = r.json()["id"]
+        assert len(self.client.get("/api/watchlist").json()) == 1
+        rd = self.client.delete(f"/api/watchlist/{item_id}")
+        assert rd.json()["removed"] is True
+        assert len(self.client.get("/api/watchlist").json()) == 0
+
+    def test_unknown_symbol_404s(self, tmp_path, monkeypatch):
+        from screener import webapp
+        monkeypatch.setattr(webapp, "WATCHLIST_FILE",
+                            tmp_path / "watchlist.jsonl")
+        r = self.client.post("/api/watchlist", json={"symbol": "NOPE",
+            "spec": {"conditions": [{"type": "trend", "direction": "up"}]}})
+        assert r.status_code == 404
+
+
+class TestScreenDiff:
+    """ROADMAP Item 5: "what changed since last run"."""
+    client = TestClient(app)
+
+    def test_first_run_has_no_diff(self, tmp_path, monkeypatch):
+        from screener import webapp
+        monkeypatch.setattr(webapp, "LOG_FILE", tmp_path / "screen_log.jsonl")
+        spec = {"conditions": [{"type": "trend", "direction": "up"}]}
+        j = self.client.post("/api/screen", json={"spec": spec}).json()
+        assert j["diff"] is None
+
+    def test_second_run_reports_diff_present(self, tmp_path, monkeypatch):
+        from screener import webapp
+        monkeypatch.setattr(webapp, "LOG_FILE", tmp_path / "screen_log.jsonl")
+        spec = {"conditions": [{"type": "trend", "direction": "up"}]}
+        self.client.post("/api/screen", json={"spec": spec})
+        j2 = self.client.post("/api/screen", json={"spec": spec}).json()
+        # nothing changed in the demo data between the two calls
+        assert j2["diff"] is not None
+        assert j2["diff"]["new"] == []
+        assert j2["diff"]["dropped"] == []
+
+    def test_recognised_as_same_screen_regardless_of_as_of(self, tmp_path,
+                                                           monkeypatch):
+        from screener import webapp
+        monkeypatch.setattr(webapp, "LOG_FILE", tmp_path / "screen_log.jsonl")
+        spec1 = {"conditions": [{"type": "trend", "direction": "up"}]}
+        spec2 = {"conditions": [{"type": "trend", "direction": "up"}],
+                 "as_of": "latest"}
+        self.client.post("/api/screen", json={"spec": spec1})
+        j2 = self.client.post("/api/screen", json={"spec": spec2}).json()
+        assert j2["diff"] is not None
+
+    def test_dropped_symbol_gets_failing_reason(self, tmp_path, monkeypatch):
+        import json
+        from screener import webapp
+        monkeypatch.setattr(webapp, "LOG_FILE", tmp_path / "screen_log.jsonl")
+        spec = {"conditions": [{"type": "trend", "direction": "up"}]}
+        spec_h = dsl.spec_hash(spec)
+        # BRKDWN is engineered to break its uptrend at the latest bar —
+        # a fabricated prior run claiming it matched exercises the
+        # "now fails" path without depending on real data changing.
+        webapp.LOG_FILE.write_text(json.dumps({
+            "ts": "2020-01-01T00:00:00", "as_of": "latest", "spec": spec,
+            "stats": {}, "spec_hash": spec_h, "matched": ["BRKDWN"],
+        }) + "\n")
+        j = self.client.post("/api/screen", json={"spec": spec}).json()
+        dropped = {d["symbol"]: d["reason"] for d in j["diff"]["dropped"]}
+        assert "BRKDWN" in dropped
+        assert "now fails" in dropped["BRKDWN"]
 
 
 # ---------------------------------------------------------------- sector /

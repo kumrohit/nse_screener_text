@@ -93,18 +93,29 @@
   .sechead{font-family:var(--sans);font-size:12px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);margin:30px 0 12px;border-bottom:1px solid var(--line);padding-bottom:6px;display:flex;align-items:center;justify-content:space-between;gap:10px}
   .sechead .toggle{font-family:var(--sans);font-size:11px;padding:3px 10px;border:1px solid var(--line);border-radius:3px;background:transparent;color:var(--muted);cursor:pointer;text-transform:none;letter-spacing:.02em}
   .sechead .toggle:hover{color:var(--text);border-color:var(--amber-dim)}
+  .sechead.sticky{position:sticky;top:0;z-index:5;background:var(--bg)}
   .capnote{font-family:var(--sans);font-size:11.5px;color:var(--muted);margin:-6px 0 12px}
+  .chip{display:inline-block;padding:2px 9px;margin:2px 4px 2px 0;border:1px solid var(--line);border-radius:12px;font-family:var(--sans);font-size:10.5px;cursor:pointer;color:var(--muted)}
+  .chip:hover{border-color:var(--amber-dim);color:var(--text)}
+  .chip.active{background:var(--amber);color:#161006;border-color:var(--amber)}
+  .sortsel{font-family:var(--sans);font-size:11.5px;padding:3px 6px;background:var(--bg);color:var(--text);border:1px solid var(--line);border-radius:3px}
   .nearmiss .sym{color:var(--muted)}
   .recent-row{display:flex;gap:12px;align-items:baseline;padding:8px 10px;border:1px solid var(--line);border-radius:4px;margin-bottom:6px;cursor:pointer;background:var(--panel2);flex-wrap:wrap}
   .recent-row:hover{border-color:var(--amber-dim)}
   .recent-row .cname{font-size:12px}
   .btnsm{font-size:11px;padding:4px 12px}
+  .newbadge{background:var(--pass);color:#06251d;font-size:10px;font-weight:700;padding:1px 6px;border-radius:3px;letter-spacing:.04em}
+  .dropped-row{display:flex;gap:10px;padding:6px 0;border-bottom:1px dashed var(--line);font-size:12.5px}
+  .dropped-row .sym{font-size:13px;min-width:80px}
   .foot{margin-top:36px;border-top:1px solid var(--line);padding-top:14px;font-family:var(--sans);font-size:12px;color:var(--muted);line-height:1.7}
   .err{display:none;margin-top:14px;border:1px solid var(--fail);border-radius:4px;background:#1A0F10;color:#F0A8A8;padding:12px 14px;font-family:var(--sans);font-size:13px}
   .spin{display:none;color:var(--amber);margin-left:6px}
   @media (prefers-reduced-motion:no-preference){.spin.on{display:inline;animation:b 1s steps(4) infinite}}
   @keyframes b{0%{content:""}}
   .empty{padding:26px;text-align:center;color:var(--muted);font-family:var(--sans);border:1px dashed var(--line);border-radius:4px}
+  .modalOverlay{display:none;position:fixed;inset:0;background:rgba(3,6,10,.72);z-index:50;align-items:center;justify-content:center;padding:20px}
+  .modalBox{background:var(--panel);border:1px solid var(--line);border-radius:6px;max-width:960px;width:100%;max-height:90vh;overflow:auto;padding:18px 20px}
+  .modalHead{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;font-family:var(--sans);font-size:14px;font-weight:600}
 </style>
 </head>
 <body>
@@ -134,9 +145,16 @@
         <option value="">— choose a pre-configured screen —</option>
       </select>
       <button class="btnsm" id="btnRecent" onclick="toggleRecent()" type="button">recent screens</button>
+      <button class="btnsm" id="btnWatchlist" onclick="toggleWatchlist()" type="button">☆ watchlist</button>
+      <button class="btnsm" onclick="saveCurrentAsPreset()" type="button">💾 save as my screen</button>
+      <button class="btnsm" id="btnMyScreens" onclick="toggleMyScreens()" type="button">manage my screens</button>
+      <button class="btnsm" id="btnDashboard" onclick="toggleDashboard()" type="button">📊 dashboard</button>
     </div>
     <div class="pdesc" id="pdesc"></div>
     <div id="recentPanel" style="display:none;margin-top:12px"></div>
+    <div id="myScreensPanel" style="display:none;margin-top:12px"></div>
+    <div id="dashboardPanel" style="display:none;margin-top:12px"></div>
+    <div id="watchlistPanel" style="display:none;margin-top:12px"></div>
   </div>
 
   <div class="err" id="err"></div>
@@ -153,10 +171,21 @@
     <div style="padding:10px 16px;border-top:1px solid var(--line)">
       <button class="btnsm" id="btnExport" onclick="exportCsv()" type="button">export matches to CSV</button>
     </div>
+    <div id="diffBox" style="display:none;padding:10px 16px;border-top:1px solid var(--line)"></div>
   </div>
 
   <div class="results" id="results"></div>
   <div class="foot" id="foot"></div>
+</div>
+
+<div class="modalOverlay" id="chartModal" onclick="if(event.target===this) closeChartModal()">
+  <div class="modalBox">
+    <div class="modalHead">
+      <span id="chartModalTitle"></span>
+      <button class="btnsm" onclick="closeChartModal()" type="button">close ✕</button>
+    </div>
+    <div id="chartModalBody"></div>
+  </div>
 </div>
 
 <script>
@@ -213,6 +242,50 @@ function replayRecent(i){
   window.scrollTo({top:0,behavior:"smooth"});
 }
 
+// ---------------------------------------------------------------- watchlist (ROADMAP Item 5)
+let WATCHLIST_LOADED=false;
+async function addToWatchlist(symbol,btnEl){
+  if(!LAST_SPEC){err("Run a screen first.");return}
+  try{
+    await api("/api/watchlist",{symbol,spec:LAST_SPEC});
+    if(btnEl){btnEl.textContent="★ watching";btnEl.disabled=true}
+    WATCHLIST_LOADED=false;
+  }catch(e){err("Could not add to watchlist: "+e.message)}
+}
+async function toggleWatchlist(){
+  const p=$("watchlistPanel"), opening=p.style.display==="none";
+  p.style.display=opening?"block":"none";
+  $("btnWatchlist").textContent=opening?"hide watchlist":"☆ watchlist";
+  if(!opening) return;
+  await loadWatchlist();
+}
+async function loadWatchlist(){
+  const p=$("watchlistPanel");
+  p.innerHTML=`<div class="pdesc" style="display:block">loading…</div>`;
+  try{
+    const items=await api("/api/watchlist");
+    WATCHLIST_LOADED=true;
+    p.innerHTML = items.length ? items.map(it=>`
+      <div class="recent-row">
+        <span class="sym" style="color:var(--amber)">${it.symbol}</span>
+        <span class="mini">tagged ${it.tagged_date} @ ₹${it.close_at_tag}</span>
+        <span class="mini">now ₹${fmt(it.current_close)} ${signed(it.move_pct)}</span>
+        <span class="mini ${it.still_holds?"pos":"neg"}">${it.still_holds===null?"—":it.still_holds?"✓ still holds":"✗ decayed"}</span>
+        <span class="cname">${it.spec.conditions?it.spec.conditions.length:0} condition(s)</span>
+        <button class="btnsm" onclick="removeFromWatchlist('${it.id}')" type="button">remove</button>
+      </div>`).join("")
+      : `<div class="pdesc" style="display:block">Nothing on the watchlist yet — click ☆ watch on a match.</div>`;
+  }catch(e){
+    p.innerHTML=`<div class="pdesc" style="display:block">Could not load watchlist: ${e.message}</div>`;
+  }
+}
+async function removeFromWatchlist(id){
+  try{
+    await fetch("/api/watchlist/"+id,{method:"DELETE"});
+    await loadWatchlist();
+  }catch(e){err("Could not remove: "+e.message)}
+}
+
 function $(id){return document.getElementById(id)}
 function setTab(t){tab=t;
   $("tabEn").classList.toggle("active",t==="en");
@@ -235,18 +308,136 @@ async function api(path, body){
   return j;
 }
 
+let BUILTIN_PRESETS=[], USER_PRESETS=[];
+
+function rebuildPresetDropdown(){
+  PRESETS = [...BUILTIN_PRESETS, ...USER_PRESETS.map(u=>({
+    id:"user:"+u.id, name:u.name, group:"My screens",
+    description:u.notes||"user-saved screen", spec:u.spec,
+    english:u.english,
+  }))];
+  const sel=$("presetSel");
+  sel.innerHTML=`<option value="">— choose a pre-configured screen —</option>`;
+  const groups={};
+  PRESETS.forEach(p=>{(groups[p.group]=groups[p.group]||[]).push(p)});
+  for(const [g,items] of Object.entries(groups)){
+    const og=document.createElement("optgroup");og.label=g;
+    items.forEach(p=>{const o=document.createElement("option");
+      o.value=p.id;o.textContent=p.name;og.appendChild(o)});
+    sel.appendChild(og);
+  }
+}
+
+async function loadUserPresets(){
+  try{ USER_PRESETS=await api("/api/user_presets") }catch(e){ USER_PRESETS=[] }
+  rebuildPresetDropdown();
+}
+
+async function saveCurrentAsPreset(){
+  if(!LAST_SPEC){ err("Run a screen first, then save it.");return }
+  const name=prompt("Name for this saved screen:");
+  if(!name) return;
+  const notes=prompt("Notes (optional):")||"";
+  try{
+    await api("/api/user_presets",{name,notes,spec:LAST_SPEC});
+    await loadUserPresets();
+    err("");
+  }catch(e){ err("Could not save: "+e.message) }
+}
+
+async function toggleMyScreens(){
+  const p=$("myScreensPanel"), opening=p.style.display==="none";
+  p.style.display=opening?"block":"none";
+  $("btnMyScreens").textContent=opening?"hide my screens":"manage my screens";
+  if(!opening) return;
+  await loadUserPresets();
+  renderMyScreensPanel();
+}
+function renderMyScreensPanel(){
+  const p=$("myScreensPanel");
+  p.innerHTML = USER_PRESETS.length ? USER_PRESETS.map(u=>`
+    <div class="recent-row">
+      <span class="sym" style="color:var(--amber)">${u.name}</span>
+      <span class="cname">${u.notes||""}</span>
+      <span class="mini">${u.english}</span>
+      <button class="btnsm" onclick="renameMyScreen('${u.id}')" type="button">rename</button>
+      <button class="btnsm" onclick="deleteMyScreen('${u.id}')" type="button">delete</button>
+    </div>`).join("")
+    : `<div class="pdesc" style="display:block">No saved screens yet — run one and click "save as my screen".</div>`;
+}
+async function renameMyScreen(id){
+  const name=prompt("New name:");
+  if(!name) return;
+  try{
+    await fetch("/api/user_presets/"+id,{method:"PUT",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({name})});
+    await loadUserPresets();
+    renderMyScreensPanel();
+  }catch(e){ err("Could not rename: "+e.message) }
+}
+async function deleteMyScreen(id){
+  try{
+    await fetch("/api/user_presets/"+id,{method:"DELETE"});
+    await loadUserPresets();
+    renderMyScreensPanel();
+  }catch(e){ err("Could not delete: "+e.message) }
+}
+
+// ---------------------------------------------------------------- multi-screen dashboard (ROADMAP Item 5)
+let DASHBOARD_SELECTED=new Set();
+
+function toggleDashboard(){
+  const p=$("dashboardPanel"), opening=p.style.display==="none";
+  p.style.display=opening?"block":"none";
+  $("btnDashboard").textContent=opening?"hide dashboard":"📊 dashboard";
+  if(opening) renderDashboardPicker();
+}
+function renderDashboardPicker(){
+  const p=$("dashboardPanel");
+  const checks=PRESETS.map(pr=>`
+    <label style="display:inline-flex;align-items:center;gap:4px;margin:2px 10px 2px 0;font-family:var(--sans);font-size:11.5px;color:var(--text)">
+      <input type="checkbox" value="${pr.id}" ${DASHBOARD_SELECTED.has(pr.id)?"checked":""} onchange="toggleDashSel('${pr.id}',this.checked)">
+      ${pr.name}
+    </label>`).join("");
+  p.innerHTML=`
+    <div class="pdesc" style="display:block;margin-bottom:8px">Pick screens to run together — the morning view.</div>
+    <div>${checks||"no presets loaded"}</div>
+    <div class="row" style="margin-top:10px"><button class="btnsm" onclick="runDashboard()" type="button">run selected</button></div>
+    <div id="dashboardResults" style="margin-top:12px"></div>`;
+}
+function toggleDashSel(id,checked){
+  if(checked) DASHBOARD_SELECTED.add(id); else DASHBOARD_SELECTED.delete(id);
+}
+async function runDashboard(){
+  if(!DASHBOARD_SELECTED.size){ err("Pick at least one screen.");return }
+  const box=$("dashboardResults");
+  box.innerHTML=`<div class="pdesc" style="display:block">running…</div>`;
+  try{
+    const j=await api("/api/screen_batch",{preset_ids:[...DASHBOARD_SELECTED]});
+    box.innerHTML=`
+      <table style="width:100%;border-collapse:collapse;font-family:var(--sans);font-size:12.5px">
+        <thead><tr style="border-bottom:1px solid var(--line);text-align:left;color:var(--muted)">
+          <th style="padding:6px 8px">Screen</th><th style="padding:6px 8px">Matched</th>
+          <th style="padding:6px 8px">Top 3</th><th style="padding:6px 8px">New since last run</th>
+        </tr></thead>
+        <tbody>${j.rows.map(r=>r.error?`
+          <tr style="border-bottom:1px dashed var(--line)"><td style="padding:6px 8px" colspan="4" class="neg">${r.name}: ${r.error}</td></tr>`:`
+          <tr style="border-bottom:1px dashed var(--line)">
+            <td style="padding:6px 8px">${r.name}</td>
+            <td style="padding:6px 8px"><b class="pos">${r.matched}</b></td>
+            <td style="padding:6px 8px">${r.top3.join(", ")||"—"}</td>
+            <td style="padding:6px 8px">${r.new_since_last_run===null?"—":r.new_since_last_run}</td>
+          </tr>`).join("")}</tbody>
+      </table>`;
+  }catch(e){ box.innerHTML=`<div class="empty">${e.message}</div>` }
+}
+
 async function init(){
   try{
-    PRESETS = await api("/api/presets");
-    const sel = $("presetSel"), groups = {};
-    PRESETS.forEach(p=>{(groups[p.group]=groups[p.group]||[]).push(p)});
-    for(const [g,items] of Object.entries(groups)){
-      const og=document.createElement("optgroup");og.label=g;
-      items.forEach(p=>{const o=document.createElement("option");
-        o.value=p.id;o.textContent=p.name;og.appendChild(o)});
-      sel.appendChild(og);
-    }
-  }catch(e){/* presets unavailable — dropdown stays empty */}
+    BUILTIN_PRESETS = await api("/api/presets");
+  }catch(e){ BUILTIN_PRESETS=[] }
+  await loadUserPresets();
   try{
     const s=await api("/api/status");
     $("status").innerHTML=`data as of <b>${s.as_of}</b> · <b>${s.universe_size}</b> symbols · ${s.history_years}y daily`+
@@ -316,7 +507,113 @@ const fmt=(v,suf="")=>v===null||v===undefined?"—":v+suf;
 const signed=v=>v===null||v===undefined?"—":
   `<span class="${v>=0?"pos":"neg"}">${v>0?"+":""}${v}%</span>`;
 
-let LAST_MATCHES=[], NEARMISS_SHOWN=true;
+// ---------------------------------------------------------------- full chart modal (ROADMAP Item 5)
+let CHART_DATA=null, CHART_ZOOM=null;
+const CHART_W=900, CHART_HP=340, CHART_HV=100, CHART_GAP=28, CHART_PAD=10;
+
+async function openChart(symbol){
+  const modal=$("chartModal");
+  $("chartModalTitle").textContent=symbol+" — loading…";
+  $("chartModalBody").innerHTML="";
+  modal.style.display="flex";
+  try{
+    const j=await api("/api/chart",{symbol, spec:LAST_SPEC});
+    CHART_DATA=j; CHART_DATA.symbol=symbol; CHART_ZOOM=null;
+    renderChart();
+  }catch(e){
+    $("chartModalTitle").textContent=symbol;
+    $("chartModalBody").innerHTML=`<div class="empty">${e.message}</div>`;
+  }
+}
+function closeChartModal(){
+  $("chartModal").style.display="none";
+  CHART_DATA=null; CHART_ZOOM=null;
+}
+
+function renderChart(){
+  const d=CHART_DATA; if(!d) return;
+  const [s,e]=CHART_ZOOM||[0,d.dates.length-1];
+  const n=e-s+1;
+  const dates=d.dates.slice(s,e+1), open=d.open.slice(s,e+1), high=d.high.slice(s,e+1),
+        low=d.low.slice(s,e+1), close=d.close.slice(s,e+1), vol=d.volume.slice(s,e+1);
+  $("chartModalTitle").textContent=`${d.symbol} — ${dates[0]} to ${dates[dates.length-1]}`;
+
+  let allVals=[...high,...low];
+  Object.entries(d.series).forEach(([k,a])=>{allVals=allVals.concat(a.slice(s,e+1).filter(v=>v!==null))});
+  Object.values(d.levels).forEach(v=>allVals.push(v));
+  allVals=allVals.filter(v=>v!==null&&isFinite(v));
+  const mn=Math.min(...allVals), mx=Math.max(...allVals), sp=(mx-mn)||1;
+  const X=i=>CHART_PAD+(CHART_W-2*CHART_PAD)*i/((n-1)||1);
+  const Y=v=>CHART_HP-CHART_PAD-(CHART_HP-2*CHART_PAD)*(v-mn)/sp;
+  const bw=Math.max(1,(CHART_W-2*CHART_PAD)/n*0.6);
+
+  let svg=`<svg viewBox="0 0 ${CHART_W} ${CHART_HP+CHART_GAP+CHART_HV}" preserveAspectRatio="none" style="width:100%;height:auto;cursor:crosshair;display:block" id="chartSvg">`;
+  for(let idx=0; idx<n; idx++){
+    const o=open[idx], c=close[idx], h=high[idx], l=low[idx];
+    if(o===null||c===null||h===null||l===null) continue;
+    const up=c>=o, color=up?"var(--pass)":"var(--fail)", x=X(idx);
+    svg+=`<line x1="${x.toFixed(1)}" x2="${x.toFixed(1)}" y1="${Y(h).toFixed(1)}" y2="${Y(l).toFixed(1)}" stroke="${color}" stroke-width="1"/>`;
+    const yTop=Y(Math.max(o,c)), yBot=Y(Math.min(o,c));
+    svg+=`<rect x="${(x-bw/2).toFixed(1)}" y="${yTop.toFixed(1)}" width="${bw.toFixed(1)}" height="${Math.max(1,yBot-yTop).toFixed(1)}" fill="${color}"/>`;
+  }
+  let leg="";
+  Object.entries(d.series).forEach(([k,a],ci)=>{
+    const seg=a.slice(s,e+1);
+    const path=seg.map((v,idx)=>v===null?"":`${idx&&seg[idx-1]!==null?"L":"M"}${X(idx).toFixed(1)},${Y(v).toFixed(1)}`).join("");
+    svg+=`<path d="${path}" fill="none" stroke="${SCOL[ci%4]}" stroke-width="1.3" opacity=".9"/>`;
+    leg+=`<span style="color:${SCOL[ci%4]}">— ${k.replace("_"," ").toUpperCase()}</span>`;
+  });
+  Object.entries(d.levels).forEach(([k,v])=>{
+    svg+=`<line x1="${CHART_PAD}" x2="${CHART_W-CHART_PAD}" y1="${Y(v).toFixed(1)}" y2="${Y(v).toFixed(1)}" stroke="var(--muted)" stroke-dasharray="4 4" stroke-width="1"/>`;
+    leg+=`<span>┄ ${k} ${v}</span>`;
+  });
+  const finiteVol=vol.filter(v=>v!==null&&isFinite(v));
+  const vmax=finiteVol.length?Math.max(...finiteVol):1;
+  const vBase=CHART_HP+CHART_GAP+CHART_HV-CHART_PAD;
+  const VY=v=>vBase-(CHART_HV-2*CHART_PAD)*(v/(vmax||1));
+  for(let idx=0;idx<n;idx++){
+    const v=vol[idx]; if(v===null) continue;
+    const up=close[idx]>=open[idx], x=X(idx), y=VY(v);
+    svg+=`<rect x="${(x-bw/2).toFixed(1)}" y="${y.toFixed(1)}" width="${bw.toFixed(1)}" height="${Math.max(0,vBase-y).toFixed(1)}" fill="${up?"var(--pass)":"var(--fail)"}" opacity=".55"/>`;
+  }
+  svg+=`<line x1="0" x2="${CHART_W}" y1="${CHART_HP+CHART_GAP/2}" y2="${CHART_HP+CHART_GAP/2}" stroke="var(--line)" stroke-width="1"/>`;
+  svg+="</svg>";
+
+  $("chartModalBody").innerHTML=`
+    <div class="sleg" style="margin-bottom:6px">${leg}
+      ${CHART_ZOOM?` <button class="btnsm" onclick="resetZoom()" type="button">reset zoom</button>`:""}
+    </div>
+    ${svg}
+    <div class="sleg" style="margin-top:6px">candles + volume · drag on the chart to zoom${CHART_ZOOM?"":""}</div>`;
+  wireZoomDrag(s, e);
+}
+
+function resetZoom(){ CHART_ZOOM=null; renderChart(); }
+
+function wireZoomDrag(curS, curE){
+  const svgEl=document.getElementById("chartSvg");
+  if(!svgEl) return;
+  const n=curE-curS+1;
+  let dragStartIdx=null;
+  const idxFromClientX=(clientX)=>{
+    const rect=svgEl.getBoundingClientRect();
+    const relX=(clientX-rect.left)/rect.width*CHART_W;
+    const frac=(relX-CHART_PAD)/(CHART_W-2*CHART_PAD);
+    return Math.max(0,Math.min(n-1,Math.round(frac*(n-1))));
+  };
+  svgEl.onmousedown=(e)=>{ dragStartIdx=idxFromClientX(e.clientX); };
+  svgEl.onmouseup=(e)=>{
+    if(dragStartIdx===null) return;
+    const dragEndIdx=idxFromClientX(e.clientX);
+    const lo=Math.min(dragStartIdx,dragEndIdx), hi=Math.max(dragStartIdx,dragEndIdx);
+    dragStartIdx=null;
+    if(hi-lo<3) return;
+    CHART_ZOOM=[curS+lo, curS+hi];
+    renderChart();
+  };
+}
+
+let LAST_MATCHES=[], NEARMISS_SHOWN=true, LAST_SPEC=null;
 function csvEscape(v){
   const s=v===null||v===undefined?"":String(v);
   return /[",\n]/.test(s)?`"${s.replace(/"/g,'""')}"`:s;
@@ -341,6 +638,11 @@ function exportCsv(){
   a.click();
   URL.revokeObjectURL(a.href);
 }
+function toggleDropped(){
+  const box=$("droppedList"), opening=box.style.display==="none";
+  box.style.display=opening?"block":"none";
+  $("btnDropped").textContent=opening?"hide dropped":"show dropped";
+}
 function toggleNearMiss(){
   NEARMISS_SHOWN=!NEARMISS_SHOWN;
   const box=$("nearMissBox");
@@ -349,26 +651,64 @@ function toggleNearMiss(){
   if(btn) btn.textContent=NEARMISS_SHOWN?"hide":"show";
 }
 
-function render(r){
-  // interpretation always shown with results — the audit header
-  $("english").textContent=r.english;
-  $("specPre").textContent=JSON.stringify(r.spec,null,2);
-  $("interp").style.display="block";
-  LAST_MATCHES=r.matches;
-  RECENT_LOADED=false; // this run just appended to the log — refetch next open
-
-  const st=r.stats, cells=[
-    ["Universe",st.universe],["Liquidity-excluded",st.liquidity_excluded],
-    ["Evaluated",st.evaluated],["Matched",st.matched,true],
-    ["Near misses",st.near_misses],["As of",r.as_of]];
-  $("cells").innerHTML=cells.map(([k,v,hl])=>
-    `<div class="cell"><div class="k">${k}</div><div class="v ${hl?"hl":""}">${v}</div></div>`).join("");
-  $("stats").style.display="block";
-
-  const card=(m,miss)=>`
+// ---------------------------------------------------------------- table ergonomics (ROADMAP Item 5)
+let SORT_KEY="ret_3m_desc", SECTOR_FILTER=null, LAST_NEW_SET=new Set();
+const SORT_OPTIONS=[
+  ["ret_3m_desc","3M return ↓"],["ret_3m_asc","3M return ↑"],
+  ["rsi_desc","RSI ↓"],["rsi_asc","RSI ↑"],
+  ["close_desc","Price ↓"],["close_asc","Price ↑"],
+  ["symbol_asc","Symbol A→Z"],
+];
+const SORT_CMP={
+  ret_3m_desc:(a,b)=>(b.metrics.ret_3m_pct??-Infinity)-(a.metrics.ret_3m_pct??-Infinity),
+  ret_3m_asc:(a,b)=>(a.metrics.ret_3m_pct??Infinity)-(b.metrics.ret_3m_pct??Infinity),
+  rsi_desc:(a,b)=>(b.metrics.rsi??-Infinity)-(a.metrics.rsi??-Infinity),
+  rsi_asc:(a,b)=>(a.metrics.rsi??Infinity)-(b.metrics.rsi??Infinity),
+  close_desc:(a,b)=>(b.metrics.close??-Infinity)-(a.metrics.close??-Infinity),
+  close_asc:(a,b)=>(a.metrics.close??Infinity)-(b.metrics.close??Infinity),
+  symbol_asc:(a,b)=>a.symbol.localeCompare(b.symbol),
+};
+function filteredSortedMatches(){
+  let arr=LAST_MATCHES;
+  if(SECTOR_FILTER) arr=arr.filter(m=>m.industry===SECTOR_FILTER);
+  return [...arr].sort(SORT_CMP[SORT_KEY]);
+}
+function onSortChange(v){ SORT_KEY=v; renderMatchesSection(); }
+function toggleSectorChip(sector){
+  SECTOR_FILTER=(SECTOR_FILTER===sector)?null:sector;
+  renderMatchesToolbar();
+  renderMatchesSection();
+}
+function renderMatchesToolbar(){
+  const box=$("matchesToolbar");
+  if(!LAST_MATCHES.length){ box.innerHTML=""; return }
+  const sectors=[...new Set(LAST_MATCHES.map(m=>m.industry))].sort();
+  const esc=s=>s.replace(/'/g,"\\'");
+  const chips=sectors.map(s=>`<span class="chip ${SECTOR_FILTER===s?"active":""}" onclick="toggleSectorChip('${esc(s)}')">${s}</span>`).join("");
+  box.innerHTML=`<div class="row" style="margin:4px 0 12px;align-items:center;flex-wrap:wrap">
+    <label class="mini">sort <select class="sortsel" onchange="onSortChange(this.value)">
+      ${SORT_OPTIONS.map(([v,l])=>`<option value="${v}" ${v===SORT_KEY?"selected":""}>${l}</option>`).join("")}
+    </select></label>
+    <span class="mini">sector:</span> ${chips}
+    ${SECTOR_FILTER?`<button class="btnsm" onclick="toggleSectorChip('${esc(SECTOR_FILTER)}')" type="button">clear filter</button>`:""}
+  </div>`;
+}
+function renderMatchesSection(){
+  const sec=$("matchesSection");
+  if(!LAST_MATCHES.length){
+    sec.innerHTML=`<div class="empty">No stocks matched every condition. The near-misses below failed exactly one — loosen that condition if they look right.</div>`;
+    return;
+  }
+  const list=filteredSortedMatches();
+  sec.innerHTML = list.length ? list.map(m=>renderCard(m,false)).join("")
+    : `<div class="empty">No matches in "${SECTOR_FILTER}" — clear the filter to see all ${LAST_MATCHES.length}.</div>`;
+}
+function renderCard(m,miss){
+  return `
     <div class="match ${miss?"nearmiss":""}" onclick="this.classList.toggle('open')">
       <div class="mhead">
         <span class="sym">${m.symbol}</span>
+        ${LAST_NEW_SET.has(m.symbol)?`<span class="newbadge">NEW</span>`:""}
         <span class="cname">${m.name} · ${m.industry}</span>
         <span class="mini">₹<b>${fmt(m.metrics.close)}</b></span>
         <span class="mini">3M ${signed(m.metrics.ret_3m_pct)}</span>
@@ -378,6 +718,8 @@ function render(r){
       </div>
       <div class="mbody">
         ${spark(m)}
+        <button class="btnsm" onclick="event.stopPropagation();openChart('${m.symbol}')" type="button">full chart ⤢</button>
+        <button class="btnsm" onclick="event.stopPropagation();addToWatchlist('${m.symbol}',this)" type="button">☆ watch</button>
         <div class="eyebrow">Evidence — why this ${miss?"almost matched":"matched"}</div>
         <div class="ledger">
           ${m.evidence.map(e=>`
@@ -399,21 +741,57 @@ function render(r){
         </div>
       </div>
     </div>`;
+}
+
+function render(r){
+  // interpretation always shown with results — the audit header
+  $("english").textContent=r.english;
+  $("specPre").textContent=JSON.stringify(r.spec,null,2);
+  $("interp").style.display="block";
+  LAST_MATCHES=r.matches;
+  LAST_SPEC=r.spec;
+  SORT_KEY="ret_3m_desc"; SECTOR_FILTER=null;
+  RECENT_LOADED=false; // this run just appended to the log — refetch next open
+
+  const st=r.stats, cells=[
+    ["Universe",st.universe],["Liquidity-excluded",st.liquidity_excluded],
+    ["Evaluated",st.evaluated],["Matched",st.matched,true],
+    ["Near misses",st.near_misses],["As of",r.as_of]];
+  $("cells").innerHTML=cells.map(([k,v,hl])=>
+    `<div class="cell"><div class="k">${k}</div><div class="v ${hl?"hl":""}">${v}</div></div>`).join("");
+  $("stats").style.display="block";
+
+  const diffBox=$("diffBox");
+  LAST_NEW_SET=new Set((r.diff&&r.diff.new)||[]);
+  if(r.diff){
+    const dropped=r.diff.dropped||[];
+    diffBox.style.display="block";
+    diffBox.innerHTML=`<b style="color:var(--text)">Since last run</b> `+
+      `(<span class="pos">+${r.diff.new.length} new</span>, `+
+      `<span class="neg">-${dropped.length} dropped</span>)`+
+      (dropped.length?` <button class="toggle" id="btnDropped" onclick="toggleDropped()" type="button" style="text-transform:none">show dropped</button>`:"")+
+      `<div id="droppedList" style="display:none;margin-top:8px">`+
+      dropped.map(d=>`<div class="dropped-row"><span class="sym neg">${d.symbol}</span><span>${d.reason}</span></div>`).join("")+
+      `</div>`;
+  } else {
+    diffBox.style.display="none";
+  }
 
   let html="";
-  html+=`<div class="sechead">Matches (${r.matches.length}) — click any row for the full evidence trail</div>`;
+  html+=`<div class="sechead sticky">Matches (${r.matches.length}) — click any row for the full evidence trail</div>`;
   if(r.stats.matched>r.matches.length){
     html+=`<div class="capnote">Showing the top ${r.matches.length} of ${r.stats.matched} matches (sorted by 3-month return) — refine the screen for a tighter list, or export CSV for the full displayed set.</div>`;
   }
-  html+= r.matches.length? r.matches.map(m=>card(m,false)).join("")
-       : `<div class="empty">No stocks matched every condition. The near-misses below failed exactly one — loosen that condition if they look right.</div>`;
+  html+=`<div id="matchesToolbar"></div><div id="matchesSection"></div>`;
   if(r.near_misses.length){
     NEARMISS_SHOWN=true;
     html+=`<div class="sechead">Near misses — failed exactly one condition
       <button class="toggle" id="btnNearMiss" onclick="toggleNearMiss()" type="button">hide</button></div>`;
-    html+=`<div id="nearMissBox">${r.near_misses.map(m=>card(m,true)).join("")}</div>`;
+    html+=`<div id="nearMissBox">${r.near_misses.map(m=>renderCard(m,true)).join("")}</div>`;
   }
   $("results").innerHTML=html;
+  renderMatchesToolbar();
+  renderMatchesSection();
 
   $("foot").innerHTML=`<b style="color:var(--text)">Methodology.</b> ${r.methodology.data}. Liquidity gate: ${r.methodology.liquidity_gate}. Missing-data policy: ${r.methodology.nan_policy}. Every screen is fully determined by the compiled spec above plus the as-of date <i>and</i> the effective config (hash <code>${r.methodology.config_hash}</code>) — rerun with the same spec on the same data and config and you get the same result. Definitions of every condition: TECHNICAL_DESIGN.md.`;
   window.scrollTo({top:$("stats").offsetTop-16,behavior:"smooth"});

@@ -5,19 +5,19 @@ commits that complete them; anything descoped gets struck through with a
 one-line reason, not silently deleted. Design rationale lives in
 TECHNICAL_DESIGN.md; this file is the *what and in which order*.
 
-Status snapshot: v0.7.0 — data layer live-verified (500/500),
-20-condition DSL (incl. sector filters & cross-sectional relative
-strength, gap), patterns, 19 presets, web UI with evidence trails,
-sparklines, as-of replay, screen log, CSV export, recent-screens
-replay, data-quality badges, config-hash footer. NSE bhavcopy data
-layer v2 built and validated, running side-by-side (2-week evidence
-clock started 2026-07-05); not cut over, nothing reads from it yet.
-Robustness hardening (v0.7 Item 6) shipped 2026-07-05 — P0
-stale-server fix, config overrides, parser resilience, `/api/health`,
-log rotation, manual golden-harness CI. UI depth (v0.7 Item 5) not
-started. 115 tests green, no known failures — `tests/conftest.py`
-makes the suite hermetic (forces demo mode so it passes identically
-in CI and on a dev machine that has already run `backfill`).
+Status snapshot: v0.8.0 — **v0.7 track complete** (Items 5 and 6).
+Data layer live-verified (500/500), 20-condition DSL (incl. sector
+filters & cross-sectional relative strength, gap), patterns, 19
+built-in presets + unlimited saved custom screens, web UI with
+evidence trails, sparklines, as-of replay, screen log, CSV export,
+recent-screens replay, data-quality badges, config-hash footer,
+screen diff, full chart modal, watchlist, multi-screen dashboard,
+sortable/filterable results. NSE bhavcopy data layer v2 built and
+validated, running side-by-side (2-week evidence clock started
+2026-07-05); not cut over, nothing reads from it yet. 137 tests
+green, no known failures — `tests/conftest.py` makes the suite
+hermetic (forces demo mode so it passes identically in CI and on a
+dev machine that has already run `backfill`).
 
 ---
 
@@ -207,37 +207,53 @@ done AND at least one screen has earned enough trust in live use that
       outside this scope rather than approximate it"). Revisit only if
       that scope decision itself is revisited.
 
-## 5. UI depth (v0.7 track) — make it a daily-driver
+## 5. UI depth (v0.7 track) — done 2026-07-06
 
 Ordered by daily-use value, not effort.
 
-- [ ] **Screen diff ("what changed since last run")** — for any spec run,
-      look up the previous run of the *same spec* (hash the canonical
-      spec; screen log already stores everything needed) and badge
-      results: NEW entrants, plus a collapsed "dropped since last run"
-      list with the condition that now fails (reuse explain on the
-      dropouts). Acceptance: run preset → update data → rerun → diff
-      correct; hash stable under key order/default fill.
-- [ ] **Full chart modal** — click a sparkline → large modal chart:
-      candlesticks (patterns need candles, not a close line), volume
-      subpane, all spec-referenced overlays + evidence levels, ~250 bars,
-      drag-to-zoom. Zero external libs (offline constraint stands);
-      hand-rolled SVG. Acceptance: driven via Playwright like v0.6.2.
-- [ ] **Watchlist with signal-decay tracking** — star a match →
-      data/watchlist.jsonl (symbol, date, spec hash, close at tag).
-      Watchlist view: % move since tag, and whether the original
-      conditions still hold today (re-evaluate spec). Acceptance:
-      tag → advance as-of → status updates correctly.
-- [ ] **Saved custom screens** — persist user-authored specs
-      (data/user_presets.json) with name/notes; appear in the dropdown
-      under "My screens"; save-from-current-spec button; delete/rename.
-      Validation identical to built-ins (reject on save, not on run).
-- [ ] **Multi-screen dashboard** — run N selected presets in one call
-      (`POST /api/screen_batch`); compact grid: preset × (match count,
-      top-3 symbols, new-since-last-run count). The morning view.
-- [ ] **Results table ergonomics** — client-side column sort, sector
-      filter chips built from the result set, sticky header. No pagination
-      (cap already exists).
+- [x] **Screen diff ("what changed since last run")** — `dsl.spec_hash()`
+      (built on the same `canonicalize_conditions` the golden harness
+      now shares, rather than duplicating it) hashes logic+conditions
+      with as_of excluded; `/api/screen` looks up the last log entry
+      with a matching hash and diffs matched-symbol sets, re-explaining
+      each dropped symbol against current data. Badge: NEW tags on
+      cards, collapsed "dropped since last run" list with the exact
+      failing condition. 4 dedicated tests incl. hash stability under
+      key order/default fill and as_of-independence.
+- [x] **Full chart modal** — `_referenced_fields`/`_evidence_levels`
+      factored out of the spark builder; `POST /api/chart` returns 250
+      bars OHLCV lazily per symbol (not embedded in every match, to
+      keep the main payload small). Hand-rolled SVG candlesticks +
+      volume subpane + drag-to-zoom, zero external libs. Driven live via
+      Playwright: candles, EMA overlay, volume, and zoom all confirmed
+      rendering correctly against the real 500-symbol store.
+- [x] **Watchlist with signal-decay tracking** — `data/watchlist.jsonl`
+      (symbol, tagged date, close at tag, the full spec). `GET
+      /api/watchlist` re-evaluates the tagged spec against *today's*
+      data every time: current close, % move since tag, `still_holds`.
+      Acceptance test passed as specified: tag BRKDWN before its
+      engineered breakdown (`still_holds=True`), confirm it reads
+      `still_holds=False` after — genuine signal-decay detection, not
+      just a stored bookmark.
+- [x] **Saved custom screens** — `data/user_presets.json`; validated via
+      `dsl.validate()` at save time, same as built-ins. Frontend merges
+      saved screens into the same `PRESETS` array the dropdown already
+      renders (id prefixed `user:`), so the existing selection code
+      needed zero changes. Rename/delete via a "manage my screens" panel.
+- [x] **Multi-screen dashboard** — `/api/screen` refactored into a
+      reusable `_run_screen(spec)` so `POST /api/screen_batch` could run
+      N presets (built-in or saved) without duplicating the
+      matching/diffing/logging logic. Grid: screen × (matched, top-3,
+      new-since-last-run). Live-verified with 3 real presets in one call.
+- [x] **Results table ergonomics** — client-side sort (return/RSI/
+      price/symbol, asc or desc) and sector filter chips built from the
+      current result set, applied without a server round-trip; sticky
+      "Matches (N)…" header while scrolling. Near-misses intentionally
+      left unsorted/unfiltered (secondary, usually shorter list).
+
+All six driven live against the real server with a temporary
+Playwright harness (screenshots + console-error checks), not just
+unit-tested — same discipline as v0.6.2. 22 new tests, 137 total.
 
 ## 6. Robustness hardening (v0.7 track) — done 2026-07-05
 

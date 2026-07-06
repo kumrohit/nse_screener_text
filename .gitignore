@@ -3,6 +3,8 @@ data/*.parquet
 !data/.gitkeep
 data/*.csv
 data/*.jsonl
+data/user_presets.json
+data/config_local.toml
 
 # python
 __pycache__/
