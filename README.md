@@ -140,6 +140,20 @@ match → allocate), the chart modal traps focus and closes on Escape, and
 see [TECHNICAL_DESIGN.md §12e](TECHNICAL_DESIGN.md) for the full
 accessibility and design-system notes.
 
+**🧪 Backtest** replays the current spec as an event study: historical
+signal dates vs. holding the universe on the same dates, with entry at
+the next day's open, gross and net (after costs) forward returns at
+several horizons, a same-date equal-weight universe baseline, a
+bootstrap confidence interval, an excess-return histogram, an events-
+per-month timeline, and a one-at-a-time sensitivity grid that flags
+whether an edge is robust across a parameter's range or concentrated at
+one value ("curve-fit"). A survivorship caveat is printed on every
+run — the current-constituents-only universe flatters dip-buying
+setups — and it's an *edge detector for filters*, not a portfolio
+simulator (no sizing, no compounding, no stops). See
+[TECHNICAL_DESIGN.md §12f](TECHNICAL_DESIGN.md) for the full
+methodology and the measured performance characteristics.
+
 With no price store yet, the app boots into a labelled 11-stock demo
 universe so everything above is explorable immediately after clone.
 
@@ -167,6 +181,11 @@ python -m screener.cli log                      # recent runs (replay trail)
 python -m screener.cli screen --json '{"logic":"AND","conditions":[
   {"type":"trend","direction":"up"},
   {"type":"range","field":"rsi","max":40}]}'
+
+# backtest: what happened after this signal fired historically?
+python -m screener.cli backtest "taking support at 50 EMA and in an uptrend" \
+  --hypothesis "expect modest positive 20-bar excess, pullback-continuation setup"
+python -m screener.cli backtest --preset flat_base_52w --horizons 5 20 60 --no-sensitivity
 ```
 
 ## What it understands
@@ -220,9 +239,12 @@ Unknown keys are flagged and ignored rather than silently doing nothing. The eff
 ## Tests
 
 ```bash
-python -m pytest tests/                    # 183 tests: synthetic series with known answers,
+python -m pytest tests/                    # 212 tests: synthetic series with known answers,
                                            # evidence-layer agreement, web API contract,
-                                           # allocation-engine invariants
+                                           # allocation-engine invariants, backtester
+                                           # methodology (event dedup, entry convention,
+                                           # baseline, costs, bootstrap, vectorizer
+                                           # consistency)
 cd web/visual && npm test                  # visual regression: 6 baseline screenshots
                                            # against a live demo-mode server (see below)
 python -m tests.golden_harness             # live parser scoring vs 23 hand-verified queries

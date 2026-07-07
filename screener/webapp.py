@@ -40,7 +40,7 @@ from fastapi import FastAPI
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 
-from . import allocate, config, dsl, evaluator, explain, indicators
+from . import allocate, backtest, config, dsl, evaluator, explain, indicators
 
 app = FastAPI(title="NSE Text Screener")
 
@@ -429,6 +429,79 @@ def allocate_endpoint(body: AllocateIn):
         "each, given the capital, risk tolerance, and constraints you "
         "specified.")
     _log_allocation(body, result)
+    return result
+
+
+class BacktestIn(BaseModel):
+    spec: dict
+    horizons: list[int] = list(backtest.DEFAULT_HORIZONS)
+    cooldown: int = backtest.DEFAULT_COOLDOWN
+    cost_pct: float = backtest.DEFAULT_COST_PCT
+    min_turnover_cr: float = config.MIN_MEDIAN_TURNOVER_CR
+    stride: int = backtest.DEFAULT_STRIDE
+    min_events: int = backtest.MIN_EVENTS
+    hypothesis: str | None = None
+    sensitivity: bool = True
+
+
+BACKTEST_LOG_FILE = config.DATA_DIR / "backtest_log.jsonl"
+
+
+def _log_backtest(body: "BacktestIn", result: dict) -> None:
+    """Same replay-guarantee spirit as screen_log.jsonl/allocation_log.jsonl
+    (ROADMAP Items 5/10): spec hash + every run parameter + hypothesis +
+    the per-horizon summary (not the full per-event table — that alone
+    can be thousands of rows; the summary is enough to see what a run
+    concluded, and screen_log already has the spec's match history)."""
+    import json as _json
+    import datetime as _dt
+    try:
+        config.DATA_DIR.mkdir(parents=True, exist_ok=True)
+        with open(BACKTEST_LOG_FILE, "a") as fh:
+            fh.write(_json.dumps({
+                "ts": _dt.datetime.now().isoformat(timespec="seconds"),
+                "spec_hash": result["spec_hash"], "english": result["english"],
+                "hypothesis": body.hypothesis, "cooldown": body.cooldown,
+                "cost_pct": body.cost_pct,
+                "min_turnover_cr": body.min_turnover_cr,
+                "stride": body.stride,
+                "n_symbols": result["n_symbols"],
+                "n_events_total": result["n_events_total"],
+                "horizons": result["horizons"],
+                "config_hash": config.config_hash(),
+            }) + "\n")
+    except OSError:
+        pass  # logging must never break a backtest response
+
+
+@app.post("/api/backtest")
+def backtest_endpoint(body: BacktestIn):
+    """Event-study backtest for a DSL spec (ROADMAP Item 14) — an edge
+    detector for filters, not a portfolio simulator. See
+    screener/backtest.py's module docstring and TECHNICAL_DESIGN.md
+    for the locked methodology (cooldown dedup, entry at open[t+1],
+    same-date universe baseline, gross/net costs, block-bootstrap
+    stats, <30-event suppression, one-at-a-time sensitivity grid,
+    survivorship caveat on every response)."""
+    try:
+        spec = dsl.validate(body.spec)
+    except dsl.DSLValidationError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=422)
+    if not body.horizons:
+        return JSONResponse({"error": "horizons must be non-empty"},
+                           status_code=422)
+
+    st = _load_state()
+    result = backtest.backtest_spec(
+        st["panels"], st["universe"], spec,
+        horizons=tuple(body.horizons), cooldown=body.cooldown,
+        cost_pct=body.cost_pct, min_turnover_cr=body.min_turnover_cr,
+        stride=body.stride, min_events=body.min_events,
+        hypothesis=body.hypothesis, benchmark=st["benchmark"],
+        sensitivity=body.sensitivity)
+    result["horizons"] = {str(h): v for h, v in result["horizons"].items()}
+    result["mode"] = st["mode"]
+    _log_backtest(body, result)
     return result
 
 

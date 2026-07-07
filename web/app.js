@@ -412,6 +412,201 @@ function exportAllocationCsv(){
   toast("Allocation exported to CSV");
 }
 
+// ---------------------------------------------------------------- screen backtester (ROADMAP Item 14)
+const EXPENSIVE_BT_TYPES=new Set(["near_support","near_resistance",
+  "breakout_resistance","bb_squeeze","rs_percentile","sector_rank",
+  "atr_pct_percentile"]);
+let LAST_BACKTEST=null;
+
+function toggleBacktest(){
+  const p=$("backtestPanel"), opening=p.style.display==="none";
+  p.style.display=opening?"block":"none";
+  $("btnBacktest").textContent=opening?"hide backtest":"🧪 backtest";
+  if(opening) renderBacktestForm();
+}
+function renderBacktestForm(){
+  const p=$("backtestPanel");
+  if(!LAST_SPEC){
+    p.innerHTML=`<div class="empty">Run a screen first — the backtester replays its spec historically.</div>`;
+    return;
+  }
+  const hasExpensive = (LAST_SPEC.conditions||[]).some(c=>EXPENSIVE_BT_TYPES.has(c.type));
+  p.innerHTML=`
+    <div class="pdesc" style="display:block;margin-bottom:8px">
+      Event-study engine: what happened after this signal fired historically,
+      versus just holding the universe on the same dates. Not a portfolio
+      simulator — no sizing, no compounding, no stops.
+      ${hasExpensive?`<br><b>This spec uses a slower condition type (support/resistance, `+
+        `Bollinger squeeze, or a cross-sectional rank) — expect roughly `+
+        `1-2 minutes, more with the sensitivity grid on.</b>`:""}
+    </div>
+    <div class="row" style="flex-wrap:wrap;gap:10px">
+      <label class="asof">horizons (bars) <input type="text" id="btHorizons" value="5,20,60" style="width:80px"></label>
+      <label class="asof">cooldown <input type="number" id="btCooldown" value="20" min="1" style="width:60px"></label>
+      <label class="asof">cost % (round trip) <input type="number" id="btCostPct" value="0.30" min="0" step="0.05" style="width:70px"></label>
+      <label class="asof">stride <input type="number" id="btStride" value="20" min="1" style="width:60px"></label>
+      <label class="asof">min events <input type="number" id="btMinEvents" value="30" min="1" style="width:60px"></label>
+    </div>
+    <div class="row" style="flex-wrap:wrap;gap:10px;margin-top:8px">
+      <label class="asof" style="flex:1">hypothesis (optional, logged with the run)
+        <input type="text" id="btHypothesis" placeholder="e.g. expect +1-2% 20-bar excess, hit rate ~55%" style="width:100%">
+      </label>
+    </div>
+    <div class="row" style="margin-top:8px">
+      <label class="asof"><input type="checkbox" id="btSensitivity" checked> sensitivity grid (one-at-a-time parameter perturbation)</label>
+      <button class="primary btnsm" onclick="runBacktest()" type="button">run backtest</button>
+    </div>
+    <div id="backtestResults" style="margin-top:12px"></div>`;
+}
+function btPct(x){ return x===null||x===undefined ? "—" : (x*100).toFixed(2)+"%" }
+function btSigned(x){
+  if(x===null||x===undefined) return "—";
+  const v=x*100;
+  return `<span class="${v>=0?"pos":"neg"}">${v>0?"+":""}${v.toFixed(2)}%</span>`;
+}
+async function runBacktest(){
+  const box=$("backtestResults");
+  box.innerHTML=`<div class="pdesc" style="display:block">running — this can take a while for support/resistance or percentile-based screens…</div>`;
+  const horizons=$("btHorizons").value.split(",").map(s=>parseInt(s.trim())).filter(n=>n>0);
+  const body={
+    spec: LAST_SPEC,
+    horizons: horizons.length?horizons:[5,20,60],
+    cooldown: parseInt($("btCooldown").value)||20,
+    cost_pct: parseFloat($("btCostPct").value)||0,
+    stride: parseInt($("btStride").value)||20,
+    min_events: parseInt($("btMinEvents").value)||30,
+    hypothesis: $("btHypothesis").value||null,
+    sensitivity: $("btSensitivity").checked,
+  };
+  try{
+    const j=await api("/api/backtest", body);
+    LAST_BACKTEST=j;
+    box.innerHTML=renderBacktestResult(j);
+  }catch(e){
+    box.innerHTML=`<div class="empty">${e.message}</div>`;
+  }
+}
+function btHorizonTable(h, stats){
+  if(stats.insufficient){
+    return `<div class="pdesc" style="display:block">
+      <b>${h}-bar horizon:</b> insufficient events (${stats.count}) — no stats shown.</div>`;
+  }
+  const eg=stats.excess_gross, en=stats.excess_net, raw=stats.raw, ci=stats.bootstrap_ci_excess_net_mean;
+  return `
+    <div class="eyebrow" style="margin:10px 0 4px">${h}-bar horizon — ${stats.count} events across ${stats.event_dates} dates</div>
+    <table style="width:100%;border-collapse:collapse;font-family:var(--sans);font-size:12px">
+      <thead><tr style="border-bottom:1px solid var(--line);text-align:left;color:var(--muted)">
+        <th style="padding:5px 8px"></th><th style="padding:5px 8px">mean</th>
+        <th style="padding:5px 8px">median</th><th style="padding:5px 8px">hit rate</th>
+        <th style="padding:5px 8px">p5 / p95</th><th style="padding:5px 8px">worst 5% mean</th>
+      </tr></thead>
+      <tbody>
+        <tr style="border-bottom:1px dashed var(--line)">
+          <td style="padding:5px 8px">excess (gross)</td>
+          <td style="padding:5px 8px">${btSigned(eg.mean)}</td>
+          <td style="padding:5px 8px">${btSigned(eg.median)}</td>
+          <td style="padding:5px 8px">${btPct(eg.hit_rate)}</td>
+          <td style="padding:5px 8px">${btPct(eg.p5)} / ${btPct(eg.p95)}</td>
+          <td style="padding:5px 8px">${btPct(eg.worst5pct_mean)}</td>
+        </tr>
+        <tr style="border-bottom:1px dashed var(--line)">
+          <td style="padding:5px 8px">excess (net)</td>
+          <td style="padding:5px 8px">${btSigned(en.mean)}</td>
+          <td style="padding:5px 8px">${btSigned(en.median)}</td>
+          <td style="padding:5px 8px">${btPct(en.hit_rate)}</td>
+          <td style="padding:5px 8px">${btPct(en.p5)} / ${btPct(en.p95)}</td>
+          <td style="padding:5px 8px">${btPct(en.worst5pct_mean)}</td>
+        </tr>
+      </tbody>
+    </table>
+    <div class="capnote">raw: event ${btSigned(raw.event_gross_mean)} gross / ${btSigned(raw.event_net_mean)} net
+      vs. same-date universe baseline ${btSigned(raw.baseline_mean)}
+      &middot; bootstrap 90% CI on mean excess (net): [${btPct(ci.lo5)}, ${btPct(ci.hi95)}]</div>`;
+}
+function btHistogram(h, events){
+  const vals = events.map(e=>e["excess_net_"+h]).filter(v=>v!==null && v!==undefined);
+  if(vals.length < 5) return "";
+  const lo=Math.min(...vals), hi=Math.max(...vals);
+  if(lo===hi) return "";
+  const nbins=12, width=(hi-lo)/nbins;
+  const bins=new Array(nbins).fill(0);
+  vals.forEach(v=>{
+    let i=Math.floor((v-lo)/width);
+    if(i>=nbins) i=nbins-1;
+    if(i<0) i=0;
+    bins[i]++;
+  });
+  const max=Math.max(...bins);
+  const bars=bins.map((count,i)=>{
+    const binLo=(lo+i*width)*100, binHi=(lo+(i+1)*width)*100;
+    const straddlesZero = binLo<0 && binHi>=0;
+    return `
+    <div style="display:flex;align-items:center;gap:6px;font-family:var(--sans);font-size:10.5px">
+      <span class="mini" style="width:96px">${binLo.toFixed(1)}% to ${binHi.toFixed(1)}%</span>
+      <span style="background:${straddlesZero?'var(--muted)':binLo>=0?'var(--pass)':'var(--fail)'};height:8px;width:${Math.max(2,count/max*160)}px;border-radius:2px"></span>
+      <span class="mini">${count}</span>
+    </div>`;
+  }).join("");
+  return `<div class="eyebrow" style="margin:8px 0 4px">${h}-bar excess (net) distribution vs. baseline</div>
+    <div style="display:flex;flex-direction:column;gap:2px">${bars}</div>`;
+}
+function btTimeline(timeline){
+  const entries=Object.entries(timeline||{});
+  if(!entries.length) return "";
+  const max=Math.max(...entries.map(e=>e[1]));
+  const bars=entries.map(([month,count])=>`
+    <div style="display:flex;align-items:center;gap:6px;font-family:var(--sans);font-size:11px">
+      <span class="mini" style="width:56px">${month}</span>
+      <span style="background:var(--amber);height:8px;width:${Math.max(2,count/max*160)}px;border-radius:2px"></span>
+      <span class="mini">${count}</span>
+    </div>`).join("");
+  return `<div class="eyebrow" style="margin:12px 0 4px">Events per month — a signal that stopped firing is a finding</div>
+    <div style="display:flex;flex-direction:column;gap:2px;max-height:220px;overflow-y:auto">${bars}</div>`;
+}
+function btSensitivityTable(grid){
+  if(!grid || !grid.length) return "";
+  const rows=grid.map(row=>`
+    <tr style="border-bottom:1px dashed var(--line)">
+      <td style="padding:5px 8px">condition[${row.condition_index}].${row.param}</td>
+      <td style="padding:5px 8px">${row.base_value}</td>
+      <td style="padding:5px 8px" class="mini">${row.cells.map(c=>
+        c.error ? "err" : `${c.value}→${c.count}ev/${btPct(c.mean_excess_net)}`).join("  ")}</td>
+      <td style="padding:5px 8px" class="${row.verdict.startsWith('robust')?'pos':'neg'}">${row.verdict}</td>
+    </tr>`).join("");
+  return `<div class="eyebrow" style="margin:12px 0 4px">Sensitivity (one-at-a-time, 20-bar excess net)</div>
+    <table style="width:100%;border-collapse:collapse;font-family:var(--sans);font-size:11.5px">
+      <thead><tr style="border-bottom:1px solid var(--line);text-align:left;color:var(--muted)">
+        <th style="padding:5px 8px">parameter</th><th style="padding:5px 8px">base</th>
+        <th style="padding:5px 8px">±2 steps (value→events/mean excess net)</th><th style="padding:5px 8px">verdict</th>
+      </tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+}
+function renderBacktestResult(j){
+  let html = `<div class="pdesc" style="display:block">${j.n_symbols} symbols, `+
+    `<b>${j.n_events_total}</b> events total (${j.elapsed_sec}s)`+
+    (j.hypothesis?`<br>Hypothesis: <i>${j.hypothesis}</i>`:"")+`</div>`;
+  html += Object.entries(j.horizons).map(([h,stats])=>
+    btHorizonTable(h,stats) + (stats.insufficient?"":btHistogram(h,j.events))).join("");
+  html += btTimeline(j.event_timeline);
+  if(j.sensitivity) html += btSensitivityTable(j.sensitivity);
+  html += `<div class="evcaveat" style="margin-top:10px">${j.survivorship_note}</div>`;
+  html += `<button class="btnsm" style="margin-top:6px" onclick="exportBacktestEventsCsv()" type="button">export events to CSV</button>`;
+  return html;
+}
+function exportBacktestEventsCsv(){
+  if(!LAST_BACKTEST || !LAST_BACKTEST.events.length){
+    err("No backtest events to export."); return;
+  }
+  const cols=Object.keys(LAST_BACKTEST.events[0]);
+  const rows=[cols, ...LAST_BACKTEST.events.map(e=>cols.map(c=>e[c]))];
+  const csv=rows.map(r=>r.map(v=>`"${String(v===null||v===undefined?"":v).replace(/"/g,'""')}"`).join(",")).join("\n");
+  const blob=new Blob([csv],{type:"text/csv"});
+  const a=document.createElement("a");
+  a.href=URL.createObjectURL(blob); a.download="backtest_events.csv"; a.click();
+  toast("Backtest events exported to CSV");
+}
+
 async function init(){
   try{
     BUILTIN_PRESETS = await api("/api/presets");
@@ -758,6 +953,9 @@ function render(r){
   LAST_ALLOCATION=null;
   $("allocatePanel").style.display="none";
   $("btnAllocate").textContent="💰 allocate";
+  LAST_BACKTEST=null;
+  $("backtestPanel").style.display="none";
+  $("btnBacktest").textContent="🧪 backtest";
 
   const st=r.stats, cells=[
     ["Universe",st.universe],["Liquidity-excluded",st.liquidity_excluded],

@@ -197,13 +197,13 @@
     .toggle, .toast, header .status, #err, #spin,
     #recentPanel, #myScreensPanel, #dashboardPanel, #watchlistPanel,
     .modalOverlay{ display:none !important }
-    /* #allocatePanel is deliberately NOT in the list above: if it's
-       open with a computed allocation, the report should include the
-       position table (the whole point of "the PDF is the audit
-       trail" extending to sizing, not just the screen) — only its
-       input controls (already .row/button/select, hidden above) are
-       suppressed. A closed panel keeps its inline display:none either
-       way. */
+    /* #allocatePanel/#backtestPanel are deliberately NOT in the list
+       above: if either is open with computed results, the report
+       should include them (the whole point of "the PDF is the audit
+       trail" extending to sizing and backtests, not just the screen)
+       — only their input controls (already .row/button/select, hidden
+       above) are suppressed. A closed panel keeps its inline
+       display:none either way. */
     .wrap{max-width:none;padding:0}
     .match{border:1px solid var(--line);break-inside:avoid}
     .mbody{display:block !important}

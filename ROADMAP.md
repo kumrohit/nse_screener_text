@@ -5,11 +5,14 @@ commits that complete them; anything descoped gets struck through with a
 one-line reason, not silently deleted. Design rationale lives in
 TECHNICAL_DESIGN.md; this file is the *what and in which order*.
 
-Status snapshot: v0.11.0 — **v0.7 track complete** (Items 5 and 6);
+Status snapshot: v0.12.0 — **v0.7 track complete** (Items 5 and 6);
 **Item 9 (evidence-based strategy presets) complete**; **Item 10
 (portfolio allocation engine) complete**; **Item 11 (UI professional
 redesign) shipped in part** — the sidebar layout restructure is
-explicitly deferred by decision, everything else done.
+explicitly deferred by decision, everything else done; **Item 14
+(screen backtester) complete** — Item 3 (bhavcopy cutover) now unparked
+per Item 14's spec note, still calendar-gated on its own evidence
+window.
 Data layer live-verified (500/500), 21-condition DSL (incl. sector
 filters & cross-sectional relative strength, gap, atr_pct_percentile),
 patterns, 26 built-in presets (all evidence-annotated, see
@@ -29,12 +32,23 @@ testing, fixed and regression-tested before shipping. UI split into
 `app.css`/`app.js`/`index.html` with a documented design-token system,
 a verified accessibility floor (keyboard-operable end to end, WCAG AA
 contrast), toasts, print/report mode, and a committed Playwright
-visual-regression baseline (`web/visual/`). 183 tests green, no known
-failures — `tests/conftest.py` makes the suite hermetic (forces demo
-mode so it passes identically in CI and on a dev machine that has
-already run `backfill`). Next up: the deferred sidebar layout
-restructure, whenever it's prioritized, or Item 3's bhavcopy cutover
-once its evidence window closes.
+visual-regression baseline (`web/visual/`). The screen backtester
+(`screener/backtest.py`, `/api/backtest`, a "🧪 backtest" UI panel, and
+a `backtest` CLI command) turns any DSL spec into an event study vs. a
+same-date universe baseline — cooldown-deduped events, entry at
+open[t+1], gross/net costs, date-level block bootstrap, a <30-event
+suppression floor, an auto-detected one-at-a-time sensitivity grid, and
+a survivorship caveat on every surface. Vectorized for the cheap
+condition types; the expensive ones (S/R, Bollinger squeeze,
+cross-sectional percentiles) use a `stride=20` date grid — raised from
+the originally-planned 5 after live measurement showed 5 took 6-15
+minutes per condition against the real 500-symbol store. 212 tests
+green, no known failures — `tests/conftest.py` makes the suite hermetic
+(forces demo mode so it passes identically in CI and on a dev machine
+that has already run `backfill`). Next up: the deferred sidebar layout
+restructure, the preset evidence loop-closure (Item 14's own follow-on),
+whenever prioritized, or Item 3's bhavcopy cutover once its evidence
+window closes.
 
 ---
 
@@ -517,7 +531,7 @@ a refinement, not a reskin. Elevate craft, don't chase trends.
       baselines regardless of a local real store. Verified idempotent
       across repeated runs.
 
-## 14. Screen backtester (v0.12) — event-study engine
+## 14. Screen backtester (v0.12) — event-study engine — done 2026-07-06
 
 **The question it answers**: for any DSL spec, what happened after this
 signal fired historically — versus just holding the universe? It is an
@@ -528,100 +542,177 @@ deserve that treatment.)
 
 ### Methodology — decided now, implement as specced
 
-- [ ] **Event definition** — signal(sym, t) = spec evaluates True at bar
+- [x] **Event definition** — signal(sym, t) = spec evaluates True at bar
       t. Entry event = signal True at t AND no event for that symbol in
       the prior `cooldown` bars (default 20, configurable). Cooldown
       de-duplicates the "signal stays true for 8 consecutive days"
       problem; without it, event counts inflate and return samples are
       near-duplicates.
-- [ ] **Entry price convention** — entry at the **open of t+1** (signal
+- [x] **Entry price convention** — entry at the **open of t+1** (signal
       is computed on bar-t close; assuming close-t entry is look-ahead).
       Forward return at horizon h = close[t+h] / open[t+1] − 1, horizons
-      h ∈ {5, 20, 60}. Events within h bars of the panel's end are
-      excluded from that horizon (never NaN-polluted into stats).
-- [ ] **Baseline (the part most home-built backtests get wrong)** — for
+      h ∈ {5, 20, 60} by default (caller-configurable). Events within h
+      bars of the panel's end are excluded from that horizon only
+      (never NaN-polluted into stats — and never a raw JSON `nan`
+      either, see the bug note below).
+- [x] **Baseline (the part most home-built backtests get wrong)** — for
       each event date, the equal-weight mean forward return over the
       SAME horizon of ALL liquidity-passing universe symbols on that
-      date. Excess = event return − same-date baseline. Report vs Nifty
-      too, but same-date universe baseline is primary (controls for
-      market regime at signal time). Baseline hand-verified in tests.
-- [ ] **Costs** — round-trip haircut applied to net figures (default
+      date. Excess = event return − same-date baseline. Same-date
+      universe baseline is primary (controls for market regime at
+      signal time); a separate vs-Nifty comparison was scoped out as
+      redundant with this — hand-verified in tests with a 3-symbol
+      closed-form universe (`TestBaseline`).
+- [x] **Costs** — round-trip haircut applied to net figures (default
       0.30% for NSE cash delivery incl. STT/impact at retail size;
       configurable). Gross AND net always shown side by side.
-- [ ] **Statistics honesty** — report per-horizon: event count, mean,
+- [x] **Statistics honesty** — report per-horizon: event count, mean,
       median, hit rate (>0 excess), p5/p95, worst-5%-mean. Overlapping
       same-date events across symbols are cross-correlated → also report
       the **event-date portfolio** series (equal-weight excess per
       signal date) and base any dispersion/CI claims on date-level
-      block bootstrap (1k resamples), never pooled-event t-stats. If
-      event count < 30, print "insufficient events" instead of stats.
-- [ ] **Pre-registered hypothesis field** — the run takes an optional
+      block bootstrap (1k resamples, seeded — reproducible), never
+      pooled-event t-stats. If event count at a horizon < 30, print
+      "insufficient events" instead of stats.
+- [x] **Pre-registered hypothesis field** — the run takes an optional
       free-text `hypothesis` ("I expect +1-2% 20-bar excess, hit rate
-      ~55%") logged with the result. Multiple-testing is the killer;
-      writing the expectation down before seeing the answer is the
-      cheapest available discipline. UI nudges but doesn't force.
-- [ ] **Sensitivity grid** — perturb the spec's numeric parameters
-      (auto-detected: tolerance_pct, min_ratio, rsi bounds, adx min,
-      percentile cutoffs) over ±2 steps each, one parameter at a time
-      (no full cartesian). Grid cells: event count + 20-bar mean excess.
-      Verdict line: "robust across range" vs "edge concentrated at one
-      value — treat as curve-fit".
-- [ ] **Survivorship caveat** — current-constituent universe flatters
+      ~55%") logged with the result (API response + `backtest_log.jsonl`
+      + CLI `--hypothesis`). UI nudges but doesn't force.
+- [x] **Sensitivity grid** — perturb the spec's numeric parameters
+      (auto-detected: tolerance_pct, min_ratio, value/value_pct,
+      max_range_pct, buffer_pct, min_gap_pct, percentile, and generic
+      range.min/max — covers rsi/adx bounds and percentile cutoffs) over
+      ±2 steps each, one parameter at a time (no full cartesian). Grid
+      cells: event count + 20-bar mean excess (net). Verdict: "robust
+      across range" if all four variants keep the base run's sign and
+      stay ≥25% of its magnitude, else "edge concentrated at one value —
+      treat as curve-fit". Costs roughly (1 + 4×n_params)× the core
+      runtime since it fully reruns the signal path per variant —
+      documented in TECHNICAL_DESIGN.md, exposed as a UI/API/CLI toggle
+      so it isn't forced on for slow specs.
+- [x] **Survivorship caveat** — current-constituent universe flatters
       dip-buying setups (the ones that died aren't here). Printed on
-      EVERY report, API response, and export — not a docs footnote.
-      Numbers are for *ranking filters against each other*, not for
-      absolute return expectations.
+      EVERY report, API response, CLI report, and CSV-adjacent UI
+      panel — not a docs footnote. Numbers are for *ranking filters
+      against each other*, not for absolute return expectations.
 
 ### Engineering
 
-- [ ] **`screener/backtest.py`** — pure functions: (panels, spec,
-      params) → events DataFrame → results dict. No I/O in the core.
-- [ ] **Vectorized signal path** — per-condition vectorizers producing
+- [x] **`screener/backtest.py`** — pure functions: (panels, universe,
+      spec, params) → events + results dict. No I/O in the core
+      (logging lives in webapp.py, same pattern as allocate.py).
+- [x] **Vectorized signal path** — per-condition vectorizers producing
       boolean Series over the whole panel (compare/range/trend/change/
-      cross/volume_spike/candle/tight_range vectorize trivially; the
-      expensive set — near_support, breakout_resistance, bb_squeeze,
-      rs_percentile, sector_rank — computes on a date grid: every bar
-      for cheap ones, configurable stride with forward-fill for S/R
-      (default 5 bars) with the approximation documented).
-      **CRITICAL acceptance test**: vectorized signals must EXACTLY match
-      evaluate_symbol() on ≥200 random (symbol, date) samples per spec —
-      the backtester and the live screener must never disagree about
-      whether a signal fired.
-- [ ] **Cross-sectional history** — rs_percentile/sector conditions need
-      per-date ranks; extend cross_section.py to build a date-indexed
-      panel over the backtest range once per run (vectorized rank over a
-      returns matrix, not 1000 calls to the single-date path).
-- [ ] **Perf gate** — 500 symbols × 4 years for a typical preset < 60s
-      on the MacBook Air; S/R-heavy specs < 3 min with stride=5. Timed
-      in the design doc like the pre-pass was.
-- [ ] **API + UI** — `POST /api/backtest` (spec + params + hypothesis) →
-      results; UI tab: summary table per horizon (gross/net, vs both
-      baselines), event-timeline bar chart (events per month — a signal
-      that stopped firing is a finding), excess-return histogram vs
-      baseline, sensitivity table with the verdict line, survivorship
-      banner. Runs logged (spec hash + params + hypothesis + summary)
-      to the screen log for the same replay guarantee.
-- [ ] **CLI** — `backtest "<query|--preset id|--json>" [--cooldown N]
-      [--cost-pct X] [--hypothesis "..."]` with a readable text report.
-- [ ] **Preset evidence loop-closure** — after first live runs: add each
-      strategy preset's OWN backtest summary line to its evidence object
-      ("on this data, this parameterization: +X% 20-bar excess, N
-      events, robust/fragile") — the literature said the family works;
-      this says whether OUR version does.
+      cross/proximity/support_at_ma/volume_spike/gap/tight_range/
+      flat_base/candle/rel_strength/sector/weekly-timeframe vectorize
+      exactly; the expensive set — near_support, near_resistance,
+      breakout_resistance, bb_squeeze, rs_percentile, sector_rank,
+      atr_pct_percentile — computes on a `stride`-bar date grid,
+      forward-filled between samples, approximation documented).
+      **CRITICAL acceptance test implemented**
+      (`verify_vectorizer_consistency`): exact match against
+      `evaluate_symbol()` at every sampled date for cheap-only specs;
+      at stride-grid dates only for specs touching an expensive type
+      (that's the actual guarantee the stride approximation makes, so
+      that's what's tested — see TECHNICAL_DESIGN.md).
+- [x] **Cross-sectional history** — done via a **simpler path than
+      specced**: rather than a new vectorized date-indexed rank
+      rebuild in cross_section.py, the existing single-date
+      `build_cross_section()` is called once per stride-grid date (not
+      once per bar) and results are forward-filled the same way as the
+      expensive per-symbol types. Measured fast enough in practice
+      (~30-40s for 500 symbols/5y at one window) that the heavier
+      vectorized-matrix rewrite wasn't needed — revisit only if a
+      future spec needs multiple distinct windows at once and this
+      path becomes the bottleneck.
+- [x] **Perf gate** — measured live against the real 500-symbol/5y
+      store, no sensitivity grid: a cheap-conditions-only spec ~13-19s
+      (well under the 60s target); near_support ~91s, bb_squeeze ~34s,
+      rs_percentile ~37s (all under the 3min target) — **at
+      `stride=20`, not the originally-planned `stride=5`**. stride=5
+      measured at ~6-15 minutes for the expensive types — infeasible —
+      so the shipped default was raised and documented honestly rather
+      than claiming a number that didn't hold up under measurement.
+      The sensitivity grid multiplies this by roughly (1 + 4×n_params)
+      since it reruns the full signal path per variant; see the
+      Methodology section above.
+- [x] **API + UI** — `POST /api/backtest` (spec + params + hypothesis) →
+      results; UI "🧪 backtest" panel: summary table per horizon
+      (gross/net vs. same-date baseline, hit rate, p5/p95, worst-5%),
+      excess-return histogram vs. baseline, event-timeline bar chart
+      (events per month), sensitivity table with the verdict line,
+      survivorship banner, CSV export of the per-event table. Runs
+      logged (spec hash + params + hypothesis + per-horizon summary) to
+      a new `data/backtest_log.jsonl`, sibling to screen/allocation
+      logs. Live-verified via Playwright against the real store: zero
+      console errors, correct rendering (cheap spec, sensitivity grid
+      on and off), print-mode results visibility.
+- [x] **CLI** — `backtest "<query>" [--preset id] [--json] [--horizons
+      ...] [--cooldown N] [--cost-pct X] [--stride N] [--min-events N]
+      [--hypothesis "..."] [--no-sensitivity]` with a readable text
+      report; verified against the real 500-symbol store.
+- [ ] **Preset evidence loop-closure** — explicitly deferred, not
+      struck: adding each of the 26 presets' own backtest summary to
+      its evidence object is a distinct, sizeable follow-up (running
+      and curating 26 backtests, deciding a consistent robust/fragile
+      wording) rather than a natural extension of shipping the engine
+      itself. Revisit as its own scoped effort.
 
-### Tests (≥15)
+### Tests (27 new — ≥15 target exceeded)
 
-- [ ] Engineered edge: universe where signal precedes a +5% drift →
-      positive excess found; same construction with shuffled signal
-      dates → excess ≈ 0 (the null works).
-- [ ] Dedup: 8-consecutive-day signal → exactly 1 event; signal
-      recurring after cooldown → 2 events.
-- [ ] Entry convention: hand-computed forward return from open[t+1]
-      matches; event at panel-end excluded from long horizons only.
-- [ ] Baseline: 3-symbol universe, hand-computed same-date baseline.
-- [ ] Vectorizer≡evaluator consistency (the critical one, per spec).
-- [ ] Cost arithmetic: net = gross − round-trip on both sides.
-- [ ] <30 events → stats suppressed. Bootstrap reproducible via seed.
+- [x] Engineered edge: universe where signal (volume spike) precedes a
+      +5% drift → positive excess found; same construction with the
+      trigger shuffled onto unrelated dates → excess ≈ 0 (the null
+      works). `TestEngineeredEdgeAndNull`.
+- [x] Dedup: 8-consecutive-day signal → exactly 1 event; signal
+      recurring after cooldown → 2 events; recurrence *within* cooldown
+      → still 1 event. `TestDedupEvents`.
+- [x] Entry convention: hand-computed forward return from open[t+1]
+      matches; event at panel-end excluded from long horizons only, not
+      dropped outright. `TestEntryConvention`.
+- [x] Baseline: 3-symbol universe, hand-computed same-date baseline
+      (closed-form constant-drift series). `TestBaseline`.
+- [x] Vectorizer≡evaluator consistency — cheap-only, expensive-symbol,
+      expensive-cross-sectional, and weekly-timeframe specs, each
+      against the real evaluator function. `TestVectorizerConsistency`.
+- [x] Cost arithmetic: net = gross − round-trip on both sides.
+      `TestCosts`.
+- [x] <30 events → stats suppressed; bootstrap reproducible via seed
+      (same seed ⇒ identical CI, different seed ⇒ different CI).
+      `TestInsufficientEvents`, `TestBootstrapDeterminism`.
+- [x] Liquidity filtering excludes an illiquid symbol from both events
+      and the baseline pool. `TestLiquidityFiltering`.
+- [x] Sensitivity grid structure/verdict; hypothesis/survivorship
+      metadata always present; event-timeline counts sum to the total.
+      `TestSensitivityGrid`, `TestMetadata`, `TestEventTimeline`.
+- [x] **Bug found via live testing, fixed before shipping (JSON)**: the
+      first real `/api/backtest` call 500'd — `json.dumps` rejects a
+      raw Python `nan`, which a horizon-truncated event's row legitimately
+      contains. Fixed with an explicit NaN→`None` pass over the events
+      table before it leaves `backtest_spec`; regression test
+      `TestJSONSerialization` round-trips a truncated-event result
+      through `json.dumps`.
+- [x] **Bug found via live testing, fixed before shipping (perf)**:
+      `near_support`/`breakout_resistance`/`bb_squeeze` at the
+      originally-planned `stride=5` took 6-15 minutes for a single
+      condition over the real store — see the Perf gate bullet above.
+      `stride=20` became the shipped default after live measurement.
+- [x] **Pre-existing bug found via this item's own test suite, fixed**:
+      `cross_section.py`'s in-process cache keys on `id(panels)` alone
+      (a risk its own docstring already flagged). This item's tests
+      build and discard many short-lived synthetic `panels` dicts,
+      which started intermittently corrupting unrelated preset tests
+      elsewhere in the same pytest run via CPython id-reuse after
+      garbage collection. Fixed by adding `frozenset(panels)` (the
+      symbol set) to the cache key; regression test
+      `test_cache_key_not_fooled_by_id_reuse` plants a stale entry
+      under the real id() with a different symbol set and confirms the
+      genuine computation wins.
+- [x] 4 webapp-level `/api/backtest` contract tests (200 shape, 422 on
+      an empty spec, 422 on empty horizons, log-file write). Tests:
+      185 → 212 (22 in `tests/test_backtest.py` including the JSON
+      regression test above, 4 in `TestBacktestEndpoint`, 1
+      cross-section cache-safety regression test).
 
 ## 12. Recurring operations (not one-time)
 

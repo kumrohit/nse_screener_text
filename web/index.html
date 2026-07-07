@@ -59,10 +59,12 @@
     <div style="padding:10px 16px;border-top:1px solid var(--line)">
       <button class="btnsm" id="btnExport" onclick="exportCsv()" type="button">export matches to CSV</button>
       <button class="btnsm" id="btnAllocate" onclick="toggleAllocate()" type="button">💰 allocate</button>
+      <button class="btnsm" id="btnBacktest" onclick="toggleBacktest()" type="button">🧪 backtest</button>
       <button class="btnsm" onclick="window.print()" type="button">🖨 print report</button>
     </div>
     <div id="diffBox" style="display:none;padding:10px 16px;border-top:1px solid var(--line)"></div>
     <div id="allocatePanel" style="display:none;padding:10px 16px;border-top:1px solid var(--line)"></div>
+    <div id="backtestPanel" style="display:none;padding:10px 16px;border-top:1px solid var(--line)"></div>
   </div>
 
   <div class="results" id="results"></div>

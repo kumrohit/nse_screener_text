@@ -16,11 +16,22 @@ import pandas as pd
 from .evaluator import _row_at
 
 # Bounded FIFO cache: replaying many as-of dates in a long-running webapp
-# must not grow memory forever, and a bounded cache also limits the blast
-# radius of the id(panels) key if a future data-reload feature ever rebuilds
-# the panels dict (a GC-reused id could otherwise serve stale ranks
-# indefinitely). 32 entries ≈ 32 replayed dates, far more than a session
-# uses; eviction is oldest-first.
+# must not grow memory forever. 32 entries ≈ 32 replayed dates, far more
+# than a session uses; eviction is oldest-first.
+#
+# Keyed by (id(panels), frozenset(panels), as_of, window) — id() alone
+# isn't safe: a short-lived `panels` dict (e.g. one built fresh per test
+# or per CLI invocation) can be garbage-collected and its memory address
+# reused by an unrelated dict built moments later, which would then
+# silently hit this cache and get another universe's stale ranks back.
+# This was a real, non-hypothetical bug: ROADMAP Item 14's backtest test
+# suite builds and discards dozens of small synthetic `panels` dicts per
+# run, and started intermittently corrupting unrelated preset tests
+# elsewhere in the same pytest session via exactly this id-reuse path.
+# frozenset(panels) is just the symbol set — cheap (panels.keys() is
+# already iterated to build the table below) and, combined with id(),
+# makes an accidental collision require both the address AND the exact
+# symbol set to match, which doesn't happen in practice.
 _CACHE: dict[tuple, pd.DataFrame] = {}
 _CACHE_MAX = 32
 
@@ -41,7 +52,7 @@ def build_cross_section(panels: dict[str, pd.DataFrame],
     than defaulted to the 0th/100th percentile. Same NaN-exclusion policy
     applies to `mom_12_1` and `atr_pct` independently of `window`.
     """
-    key = (id(panels), as_of, int(window))
+    key = (id(panels), frozenset(panels), as_of, int(window))
     if key in _CACHE:
         return _CACHE[key]
 

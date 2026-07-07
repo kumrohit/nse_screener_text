@@ -1001,6 +1001,48 @@ class TestAllocateEndpoint:
         assert "positions" in entry and "summary" in entry
 
 
+class TestBacktestEndpoint:
+    """ROADMAP Item 14: screen backtester, API contract."""
+    client = TestClient(app)
+
+    def test_basic_backtest_e2e(self):
+        r = self.client.post("/api/backtest", json={
+            "spec": {"conditions": [{"type": "trend", "direction": "up"}]},
+            "horizons": [5, 20], "sensitivity": False})
+        assert r.status_code == 200
+        j = r.json()
+        assert set(j["horizons"].keys()) == {"5", "20"}
+        assert "survivorship_note" in j and "Survivorship" in j["survivorship_note"]
+        assert "events" in j and "n_events_total" in j and "elapsed_sec" in j
+
+    def test_invalid_spec_422s(self):
+        r = self.client.post("/api/backtest", json={
+            "spec": {"conditions": []}, "sensitivity": False})
+        assert r.status_code == 422
+
+    def test_empty_horizons_422s(self):
+        r = self.client.post("/api/backtest", json={
+            "spec": {"conditions": [{"type": "trend", "direction": "up"}]},
+            "horizons": [], "sensitivity": False})
+        assert r.status_code == 422
+
+    def test_backtest_logged(self, tmp_path, monkeypatch):
+        from screener import webapp
+        monkeypatch.setattr(webapp, "BACKTEST_LOG_FILE",
+                            tmp_path / "backtest_log.jsonl")
+        self.client.post("/api/backtest", json={
+            "spec": {"conditions": [{"type": "trend", "direction": "up"}]},
+            "horizons": [5], "sensitivity": False,
+            "hypothesis": "expect positive drift continuation"})
+        assert webapp.BACKTEST_LOG_FILE.exists()
+        import json as _json
+        entry = _json.loads(
+            webapp.BACKTEST_LOG_FILE.read_text().strip().splitlines()[-1])
+        assert entry["spec_hash"] and entry["hypothesis"] == \
+            "expect positive drift continuation"
+        assert "horizons" in entry and "n_events_total" in entry
+
+
 class TestScreenBatch:
     """ROADMAP Item 5: the morning-view multi-screen dashboard."""
     client = TestClient(app)
@@ -1245,6 +1287,27 @@ class TestCrossSection:
         panels, uni = _sector_universe()
         df = cross_section.build_cross_section(panels, uni, "latest", 63)
         assert pd.isna(df.loc["THIN", "ret_pct"])
+
+    def test_cache_key_not_fooled_by_id_reuse(self):
+        """The cache is keyed by id(panels), which CPython can and does
+        reuse once an earlier `panels` dict is garbage-collected — a
+        real bug this session's Item 14 backtest tests exposed by
+        churning through many short-lived synthetic panels dicts and
+        intermittently corrupting unrelated preset tests elsewhere in
+        the same pytest run. Simulate the exact collision: plant a
+        stale entry under this dict's own id() but a different symbol
+        set, and confirm the real computation still wins."""
+        panels, uni = _sector_universe()
+        stale_key = (id(panels), frozenset({"NOT", "THE", "SAME", "SYMBOLS"}),
+                    "latest", 63)
+        bogus = pd.DataFrame({"ret_pct": [999.0]}, index=["A1"])
+        cross_section._CACHE[stale_key] = bogus
+        try:
+            df = cross_section.build_cross_section(panels, uni, "latest", 63)
+            assert set(df.index) == set(panels)
+            assert df.loc["A1", "ret_pct"] != 999.0
+        finally:
+            cross_section._CACHE.pop(stale_key, None)
         assert pd.isna(df.loc["THIN", "rs_percentile"])
 
     def test_sector_ranking_direction(self):
@@ -1371,8 +1434,9 @@ class TestCrossSectionCache:
         for d in dates:
             cs.build_cross_section(st["panels"], st["universe"], d, 63)
         assert len(cs._CACHE) <= cs._CACHE_MAX
-        # most recent as_of must still be cached (FIFO evicts oldest)
-        assert any(k[1] == dates[-1] for k in cs._CACHE)
+        # most recent as_of must still be cached (FIFO evicts oldest);
+        # key is (id(panels), frozenset(panels), as_of, window)
+        assert any(k[2] == dates[-1] for k in cs._CACHE)
 
 
 # ============================================================ ROADMAP Item 9
