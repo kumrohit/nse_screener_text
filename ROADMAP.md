@@ -714,6 +714,83 @@ deserve that treatment.)
       regression test above, 4 in `TestBacktestEndpoint`, 1
       cross-section cache-safety regression test).
 
+## 15. Equity depth track (v0.13) — universe expansion within equities
+
+~~Multi-asset expansion (FX Phase B, crypto Phase C)~~ — **descoped
+2026-07-07**: equity only for now; other asset classes get separate
+engines later rather than field-mask/calendar abstractions here. This
+removes the field-mask, calendar, and bars_per_year workstreams entirely;
+the freed budget goes to equity depth. Cross-universe screens remain
+deferred. US equities / MCX / F&O deferrals stand as recorded.
+
+### A. Equity universe registry (registry-lite)
+
+All universes share NSE calendar, INR, and the full field set — so the
+registry holds only: {id, name, symbol_source, liquidity_gate,
+benchmark, survivorship_note}. No asset-class branching anywhere.
+
+- [ ] `screener/universes.py` with three universes: `nifty500`
+      (current), `nse_full` (all EQ series from bhavcopy, ~1,900 names,
+      liquidity gate ₹2cr median turnover, strengthened survivorship
+      note — churn outside the 500 is far worse), `nse_etf` (NSE-listed
+      ETFs; sector/RS conditions disabled via the existing
+      cross_section/sector plumbing, not a field mask; benchmark ^NSEI
+      for equity ETFs, rel_strength validation rejects commodity ETFs
+      pending a per-symbol benchmark map — keep v1 simple: equity-index
+      ETFs only, gold/silver ETFs excluded from the list).
+- [ ] Per-universe storage data/{universe_id}/…; nifty500 migrates with
+      a one-time move; screen-log entries gain `universe` (old entries
+      default on read).
+- [ ] `--universe` on all CLI commands; webapp header selector; preset
+      `universes` tags (RS/sector presets tagged off for nse_etf).
+- [ ] **Memory gate (hard)** — nse_full ≈ 4× panels. Either peak RSS
+      < 4 GB on the Air with panels resident, or on-demand panel build
+      with LRU (< 30 s cold screen, < 5 s warm). Measure first.
+- [ ] Zero nifty500 behaviour change: suite green, spec hashes
+      unchanged, old logs readable.
+
+### B. Survivorship mitigation — point-in-time index membership
+
+The single biggest robustness upgrade available to the backtester. NSE
+publishes semi-annual index reconstitution changes; build a membership
+history file (symbol, entry_date, exit_date) for Nifty 500.
+
+- [ ] `data/nifty500/membership.csv` + ingestion helper — sources: NSE
+      index press releases / historical constituent archives; accept
+      that coverage starts wherever records allow (target: full 5y
+      window; document actual coverage achieved).
+- [ ] Backtester consumes it: a symbol is eligible for events only
+      between entry_date and exit_date — kills the "2025 IPO appears in
+      2022 screens" inclusion bias.
+- [ ] **Honest limitation, stated in the survivorship note**: delisted/
+      dropped names whose PRICE DATA we lack still can't contribute
+      losing events — membership dates fix inclusion bias, not data
+      absence. The note quantifies it: "N symbols entered/exited the
+      index in the window; price history exists for M of them."
+- [ ] Screener (as-of replay) gets the same eligibility filter behind a
+      flag (default on for backtests, on for historical as-of screens,
+      irrelevant for latest).
+
+### C. Equity-native conditions (post-bhavcopy-cutover + breadth)
+
+- [ ] Bhavcopy cutover completes per Item 2 (clock: started 2026-07-05,
+      eligible ~2026-07-19) — prerequisite for nse_full symbol list and
+      delivery data.
+- [ ] `delivery` DSL condition + vocabulary + accumulation preset
+      (volume spike + delivery ≥ 60%) — the Item 2 deferred task, lands
+      here.
+- [ ] **Market breadth regime fields** — computed from the universe
+      itself into the cross-sectional pre-pass: pct_above_200dma,
+      pct_at_20d_high; new `breadth` condition ("market breadth
+      positive" → pct_above_200dma ≥ 50). Regime context for every
+      equity screen without external data. Golden fixtures + preset
+      annotation (breadth filters are regime qualifiers, weak alone).
+- [ ] Backtest loop: rerun the strategy-preset evidence closure on
+      nse_full vs nifty500 — does the edge strengthen in the broader,
+      less-efficient universe (the momentum literature says it should)
+      or was it a large-cap artifact? That comparison is the payoff of
+      this whole item.
+
 ## 12. Recurring operations (not one-time)
 
 - [ ] Nightly: `update && verify` (cron after 18:30 IST) — set up once,
