@@ -5,19 +5,18 @@ commits that complete them; anything descoped gets struck through with a
 one-line reason, not silently deleted. Design rationale lives in
 TECHNICAL_DESIGN.md; this file is the *what and in which order*.
 
-Status snapshot: v0.12.1 — **v0.7 track complete** (Items 5 and 6);
+Status snapshot: v0.13.0 — **v0.7 track complete** (Items 5 and 6);
 **Item 9 (evidence-based strategy presets) complete**; **Item 10
 (portfolio allocation engine) complete**; **Item 11 (UI professional
 redesign) shipped in part** — the sidebar layout restructure is
 explicitly deferred by decision, everything else done; **Item 14
 (screen backtester) complete** — Item 3 (bhavcopy cutover) now unparked
 per Item 14's spec note, still calendar-gated on its own evidence
-window; **Item 15 Phase A (universe registry-lite) foundation landed**
-2026-07-09 — by explicit scoping decision, only the refactor itself
-(registry, per-universe storage, `--universe` CLI threading, a
-universe-keyed webapp state cache), proven with zero behaviour change;
-`nse_full`/`nse_etf` themselves, the memory gate, and the UI selector
-are a deliberate follow-up, not built this pass.
+window; **Item 15 Phase A (universe registry) complete** 2026-07-10 —
+`nifty500` + `nse_full` (2,047 symbols, real backfill run) registered,
+`--universe` CLI threading, a webapp universe selector, the hard memory
+gate measured and passed (782 MB, no architecture change needed).
+`nse_etf` and preset `universes` tags remain a deliberate follow-up.
 Data layer live-verified (500/500), 21-condition DSL (incl. sector
 filters & cross-sectional relative strength, gap, atr_pct_percentile),
 patterns, 26 built-in presets (all evidence-annotated, see
@@ -49,15 +48,20 @@ cross-sectional percentiles) use a `stride=20` date grid — raised from
 the originally-planned 5 after live measurement showed 5 took 6-15
 minutes per condition against the real 500-symbol store. The universe
 registry (`screener/universes.py`) turns "which symbols/store/benchmark"
-into a config entry rather than hardcoded paths — today it holds exactly
-one entry, `nifty500`, migrated from a flat `data/` layout into
-`data/nifty500/` via an idempotent one-time move, verified against the
-real dev-machine store. 225 tests green, no known failures —
-`tests/conftest.py` makes the suite hermetic (forces demo mode so it
+into a config entry rather than hardcoded paths — `nifty500` (migrated
+from a flat `data/` layout into `data/nifty500/` via an idempotent
+one-time move) and `nse_full` (all 2,047 NSE EQ-series symbols,
+backfilled live over the existing yfinance pipeline — no new
+adjustment-correctness code), each with its own liquidity gate and
+survivorship note, selectable from a webapp header dropdown or
+`--universe` on the CLI. Memory gate measured and passed (782 MB peak
+RSS with both universes' panels resident, vs. a 4 GB target) — no
+on-demand/LRU rearchitecture needed. 236 tests green, no known failures
+— `tests/conftest.py` makes the suite hermetic (forces demo mode so it
 passes identically in CI and on a dev machine that has already run
-`backfill`). Next up: `nse_full`/`nse_etf` onboarding (Item 15 Phase A
-continued) or point-in-time index membership (Item 15 Phase B), the
-deferred sidebar layout restructure, the preset evidence loop-closure
+`backfill`). Next up: `nse_etf` onboarding or point-in-time index
+membership (Item 15 Phase B), the deferred sidebar layout restructure,
+the preset evidence loop-closure
 (Item 14's own follow-on), or Item 3's bhavcopy cutover once its
 evidence window closes.
 
@@ -734,34 +738,38 @@ removes the field-mask, calendar, and bars_per_year workstreams entirely;
 the freed budget goes to equity depth. Cross-universe screens remain
 deferred. US equities / MCX / F&O deferrals stand as recorded.
 
-### A. Equity universe registry (registry-lite) — foundation slice done 2026-07-09
+### A. Equity universe registry (registry-lite) — done 2026-07-10
 
 All universes share NSE calendar, INR, and the full field set — so the
-registry holds only: {id, name, symbol_source, liquidity_gate,
-benchmark, survivorship_note}. No asset-class branching anywhere.
+registry holds only: {id, name, benchmark, liquidity_gate,
+survivorship_note}. No asset-class branching anywhere. Landed in two
+slices: a foundation refactor (2026-07-09, zero behaviour change,
+`nifty500` only) followed by onboarding the second universe,
+`nse_full`, once the foundation was proven (2026-07-10).
 
-**Scoped by explicit decision before starting**: land the registry
-refactor and prove zero behaviour change first, defer `nse_full`/
-`nse_etf` themselves (and everything that only matters once a second
-universe exists) to a follow-up — matches this section's own note below
-that the refactor "must land alone."
-
-- [x] `screener/universes.py` — registry with **one** universe,
-      `nifty500`. Deliberately minimal schema for now: `{id, name,
-      benchmark_ticker, survivorship_note}` — no `liquidity_gate`/
-      `sector_enabled`/`symbol_source` fields yet, since with a single
-      universe there's nothing for them to differ against
-      (`config.MIN_MEDIAN_TURNOVER_CR` and the sector/RS condition
-      types stay global exactly as before). `nse_full`/`nse_etf` and
-      the fuller schema they need are **not built this pass** — a
-      distinct follow-up, not a natural extension of the plumbing.
+- [x] `screener/universes.py` — registry with **two** universes:
+      `nifty500` (existing) and `nse_full` (all NSE EQ-series symbols,
+      2,047 per NSE's own equity listing — vs. nifty500's ~500).
+      `liquidity_gate_cr` is the first field that earns its place on
+      `Universe`: nse_full's much longer tail of thin names needs a
+      stricter ₹2cr floor vs. nifty500's ₹0.5cr. `sector_enabled` is
+      still not a field — NSE's raw listing carries no sector/industry
+      classification (an index-methodology concept, not a raw-listing
+      one), so `sector`/`sector_rank` conditions simply find nothing to
+      match for nse_full; the existing NaN-industry handling already
+      degrades gracefully, no registry flag needed. `nse_etf` and the
+      full original schema (`symbol_source` as a stored callable, etc.)
+      remain a further follow-up.
 - [x] Per-universe storage `data/{universe_id}/…` (prices.parquet,
       universe.csv, benchmark.parquet). `config.py` gained
       `price_store()`/`universe_file()`/`benchmark_store()` functions
       (default-universe case still resolves through the existing
       `PRICE_STORE`/`UNIVERSE_FILE`/`BENCHMARK_STORE` attributes so
       `monkeypatch.setattr(config, "PRICE_STORE", …)`-style test
-      fixtures kept working unchanged). An idempotent
+      fixtures kept working unchanged), plus `config.liquidity_gate_cr
+      (universe_id)` with the same deferral pattern — nifty500 still
+      honours a `config_local.toml` override of `MIN_MEDIAN_TURNOVER_CR`,
+      nse_full uses its own fixed registry value. An idempotent
       `_migrate_legacy_nifty500_layout()` runs at import time and moved
       the real dev-machine store from flat `data/` into `data/nifty500/`
       on first run — verified against the actual 500-symbol store, not
@@ -769,21 +777,53 @@ that the refactor "must land alone."
       old entries without it default to `nifty500` on read
       (`GET /api/log`), not backfilled in place.
 - [x] `--universe` on `backfill`/`update`/`verify`/`screen`/`backtest`
-      (argparse `choices` gives free validation + a helpful error).
-      **Not done**: a webapp header selector and preset `universes`
-      tags — both are dead UI with only one universe registered;
-      building them now would be unused generality. The webapp's state
-      cache is already keyed by `universe_id` internally (`_load_state
-      (universe_id=...)`) so adding the selector later is a UI-only
-      change, not a plumbing change.
-- [ ] **Memory gate (hard)** — not applicable yet; only relevant once
-      `nse_full` (~4× panel memory) exists. Deferred with it.
+      (argparse `choices` gives free validation + a helpful error) —
+      `python -m screener.cli backfill --universe nse_full` ran the real
+      2,047-symbol backfill (2,065,698 rows, 2021-07-12 → 2026-07-10, via
+      the existing yfinance pipeline — no new adjustment-correctness
+      code, just a bigger symbol list; took ~15 minutes live, well under
+      the originally-estimated 30-60 given yfinance's chunked download
+      held up fine at this scale).
+- [x] **Webapp universe selector** — `GET /api/universes` (registered
+      universes + which is active), `POST /api/universe` (switches a
+      single process-wide active universe — this is a local, single-user
+      tool, not multi-tenant, so a per-request universe field on every
+      endpoint would be unused generality; every existing endpoint
+      already reads through `_load_state(_ACTIVE_UNIVERSE)`). A header
+      `<select>` in the UI, hidden when fewer than 2 universes are
+      registered. Switching resets any in-progress screen/allocation/
+      backtest (a prior universe's results no longer apply). First load
+      of a not-yet-cached universe in a server session is a real,
+      honestly-messaged cost (nse_full: ~165s to build 1,956 panels
+      cold) — cached per-universe after that, confirmed instant on
+      repeat switches via live testing.
+- [x] **Memory gate (hard) — PASSES, no architecture change needed**:
+      measured live with both universes' panels resident simultaneously
+      (500 nifty500 + 1,956 nse_full, 91 nse_full symbols dropped by the
+      existing 60-bar-minimum filter) — peak RSS 782 MB, comfortably
+      under the 4 GB target. The on-demand LRU panel-build fallback the
+      spec allowed for was not needed.
+- [x] **Bug found via live testing, fixed before shipping**: the
+      backtest survivorship caveat was hardcoded to `backtest.py`'s own
+      nifty500-worded constant regardless of which universe was actually
+      active — an nse_full backtest printed a caveat claiming "Nifty 500
+      constituent list," which is simply wrong for a 2,047-symbol
+      universe with even heavier churn. Fixed by threading
+      `universes.get(universe_id).survivorship_note` through
+      `backtest_spec()`'s new `survivorship_note` parameter (CLI and
+      webapp both pass it; the module constant remains the default for
+      any caller that doesn't), with a regression test asserting the
+      webapp backtest endpoint's caveat text matches the active universe.
 - [x] **Zero nifty500 behaviour change, verified**: full suite green
-      (225 tests, 13 new for the registry/migration/log-field/CLI-flag
-      behaviour), and live-checked against the real 500-symbol store —
-      `screen`/`backtest` CLI commands and the webapp both produce
-      identical results after migration as before it (same match
-      counts, same `as_of`, `panel_count: 500`).
+      (236 tests — 225 after the foundation slice, 11 more for nse_full/
+      the selector/the survivorship fix), and live-checked against the
+      real 500-symbol store — `screen`/`backtest` CLI commands and the
+      webapp both produce identical results after migration as before
+      it (same match counts, same `as_of`, `panel_count: 500`).
+- [ ] **Not built this pass**: `nse_etf`, preset `universes` tags (no
+      second universe existed to differentiate presets against when
+      that bullet was originally scoped out; revisit once `nse_etf`
+      makes some presets genuinely inapplicable).
 
 ### B. Survivorship mitigation — point-in-time index membership
 

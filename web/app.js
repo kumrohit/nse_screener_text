@@ -607,16 +607,58 @@ function exportBacktestEventsCsv(){
   toast("Backtest events exported to CSV");
 }
 
+async function refreshStatus(){
+  try{
+    const s=await api("/api/status");
+    $("status").innerHTML=`data as of <b>${s.as_of}</b> · <b>${s.universe_size}</b> symbols · ${s.history_years}y daily`+
+      (s.mode==="demo"?`<span class="badge">DEMO DATA</span>`:``);
+    return s;
+  }catch(e){$("status").textContent="backend unreachable"; return null}
+}
+
+// ---------------------------------------------------------------- universe selector (ROADMAP Item 15 Phase A)
+async function loadUniverses(){
+  try{
+    const list=await api("/api/universes");
+    const sel=$("universeSel");
+    if(list.length<2){ sel.style.display="none"; return } // nothing to pick between yet
+    sel.innerHTML=list.map(u=>`<option value="${u.id}" ${u.active?"selected":""}>${u.name}</option>`).join("");
+    sel.style.display="";
+  }catch(e){ /* selector just stays hidden */ }
+}
+async function switchUniverse(){
+  const id=$("universeSel").value;
+  const name=$("universeSel").selectedOptions[0].textContent;
+  busy(true);
+  const prevStatus=$("status").innerHTML;
+  $("status").innerHTML=`switching to <b>${name}</b>… first load of a `+
+    `universe in this server session can take a couple of minutes `+
+    `(building indicators for every symbol); instant after that.`;
+  try{
+    await api("/api/universe",{id});
+    await refreshStatus();
+    toast(`Switched to ${name}`);
+    // a screen/allocation/backtest from the previous universe no
+    // longer applies — same reset a fresh screen run does.
+    $("interp").style.display="none";
+    $("stats").style.display="none";
+    $("results").innerHTML="";
+    LAST_MATCHES=[]; LAST_SPEC=null; spec=null;
+    $("btnRun").disabled = tab==="en" ? !spec : false;
+  }catch(e){
+    err("Could not switch universe: "+e.message);
+    $("status").innerHTML=prevStatus;
+  }
+  busy(false);
+}
+
 async function init(){
   try{
     BUILTIN_PRESETS = await api("/api/presets");
   }catch(e){ BUILTIN_PRESETS=[] }
   await loadUserPresets();
-  try{
-    const s=await api("/api/status");
-    $("status").innerHTML=`data as of <b>${s.as_of}</b> · <b>${s.universe_size}</b> symbols · ${s.history_years}y daily`+
-      (s.mode==="demo"?`<span class="badge">DEMO DATA</span>`:``);
-  }catch(e){$("status").textContent="backend unreachable";}
+  await refreshStatus();
+  await loadUniverses();
 }
 
 async function interpret(){

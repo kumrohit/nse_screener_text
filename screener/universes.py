@@ -1,22 +1,26 @@
 """Universe registry (ROADMAP Item 15 Phase A — registry-lite).
 
 Every screenable universe is a config entry, not an if-branch scattered
-through the codebase. Today this registry holds exactly one universe,
-`nifty500` — the point of building it now, before `nse_full`/`nse_etf`
-are onboarded, is to prove the abstraction (per-universe storage,
-`--universe` threading through the CLI, a state cache keyed by
-universe) with **zero behaviour change**: the full test suite green,
-spec hashes unchanged, screen log backward-readable. A second universe
-should be addable as a new `Universe` entry here plus its own
-symbol-list/data-ingestion work, without touching CLI/webapp plumbing
-again.
+through the codebase. Started with exactly one universe, `nifty500`,
+to prove the abstraction (per-universe storage, `--universe` threading
+through the CLI, a state cache keyed by universe) with **zero behaviour
+change** before onboarding a second one. `nse_full` is that second
+universe: all NSE EQ-series symbols (~2,000+, vs. Nifty 500's 500),
+sourced from NSE's own listing archive rather than the index-membership
+CSV nifty500 uses (see `universe.py`'s per-universe fetch dispatch) and
+backfilled via the same yfinance pipeline as nifty500 — no new
+adjustment-correctness code, just a bigger symbol list.
 
-Deliberately minimal for now: no `liquidity_gate`/`sector_enabled`
-fields yet, because with a single universe there is nothing for them to
-differ against — `config.MIN_MEDIAN_TURNOVER_CR` and the sector/RS
-condition types stay global exactly as before. Add those fields to
-`Universe` when `nse_full` (a different natural liquidity floor) or
-`nse_etf` (sector/RS disabled) actually need them, not speculatively.
+`liquidity_gate_cr` is the first field that earns its place on
+`Universe`: nse_full's much longer tail of thin, sometimes-barely-traded
+names needs a stricter floor (₹2cr vs nifty500's ₹0.5cr) to keep data
+glitches (near-zero volume days) from masquerading as real liquidity.
+`sector_enabled` is still not a field — NSE's raw equity listing carries
+no sector/industry classification (that's an index-methodology concept,
+not a raw-listing one), so `sector`/`sector_rank` conditions simply find
+no matches for nse_full today; that's a real limitation, not a bug, and
+doesn't need a registry flag to be handled correctly (the existing
+NaN-industry code paths already degrade gracefully).
 
 All equity universes share the NSE calendar, INR, and the full
 indicator field set — the field-mask/calendar/bars_per_year abstraction
@@ -33,6 +37,7 @@ class Universe:
     id: str
     name: str
     benchmark_ticker: str | None    # yfinance ticker for rel_strength, or None
+    liquidity_gate_cr: float        # min 20-day median turnover, crores INR
     survivorship_note: str
 
 
@@ -43,12 +48,31 @@ UNIVERSES: dict[str, Universe] = {
         id="nifty500",
         name="Nifty 500",
         benchmark_ticker="^NSEI",
+        liquidity_gate_cr=0.5,
         survivorship_note=(
-            "Nifty 500 constituents as of the current index list, "
-            "projected backward — symbols delisted, merged, or dropped "
-            "since aren't in this universe. Flatters strategies "
-            "(especially dip-buying) since the names that didn't "
-            "survive aren't here to drag the average down."
+            "Survivorship caveat: Nifty 500 constituents as of the "
+            "current index list, projected backward — symbols "
+            "delisted, merged, or dropped since aren't in this "
+            "universe. Flatters strategies (especially dip-buying) "
+            "since the names that didn't survive aren't here to drag "
+            "the average down."
+        ),
+    ),
+    "nse_full": Universe(
+        id="nse_full",
+        name="NSE Full (all EQ series)",
+        benchmark_ticker="^NSEI",
+        liquidity_gate_cr=2.0,
+        survivorship_note=(
+            "Survivorship caveat: all NSE EQ-series symbols as of the "
+            "current exchange listing, projected backward — an even "
+            "more aggressive survivorship bias than Nifty 500. Names "
+            "outside any index delist, get suspended, or merge far "
+            "more often, and none of that churn is represented here. "
+            "No sector/industry classification is available for this "
+            "universe (NSE's raw listing doesn't carry one), so "
+            "sector-based screens will find nothing to match. Treat "
+            "results as more exploratory and noisier than Nifty 500's."
         ),
     ),
 }

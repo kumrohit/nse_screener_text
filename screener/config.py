@@ -154,6 +154,21 @@ def _load_local_overrides() -> dict:
 LOCAL_OVERRIDES = _load_local_overrides()
 
 
+def liquidity_gate_cr(universe_id: str = DEFAULT_UNIVERSE) -> float:
+    """Effective liquidity floor for a universe. nifty500 defers to
+    `MIN_MEDIAN_TURNOVER_CR` (so `config_local.toml` can still tune it
+    — same reasoning as the `price_store()`-style path helpers above:
+    the default universe's behaviour must not change silently once a
+    registry exists). Other universes use their own registry value —
+    nse_full's much longer tail of thin names needs a stricter floor
+    than nifty500's, and that value isn't meant to be end-user-tunable
+    the way the single global constant was."""
+    if universe_id == DEFAULT_UNIVERSE:
+        return MIN_MEDIAN_TURNOVER_CR
+    from . import universes
+    return universes.get(universe_id).liquidity_gate_cr
+
+
 def config_hash() -> str:
     """Short, stable hash of the effective value of every overridable
     tunable — logged with each screen so a result stays traceable to

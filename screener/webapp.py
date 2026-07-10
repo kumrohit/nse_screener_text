@@ -45,13 +45,20 @@ from . import (allocate, backtest, config, dsl, evaluator, explain,
 
 app = FastAPI(title="NSE Text Screener")
 
-# Keyed by universe_id (ROADMAP Item 15 Phase A) — today only ever
-# populated for `universes.DEFAULT_UNIVERSE` since no endpoint or UI
-# exposes another one yet, but every reader already goes through
-# `_load_state(universe_id)` so a second universe is a pure addition
-# once one exists, not a plumbing change.
+# Keyed by universe_id (ROADMAP Item 15 Phase A) — every reader goes
+# through `_load_state(universe_id)`, so a second universe's cache
+# entry is a pure addition, not a plumbing change.
 _state: dict[str, dict] = {}
 _lock = threading.Lock()
+
+# Single active universe for the whole server process (ROADMAP Item 15
+# Phase A) — this is a local, single-user tool, not a multi-tenant
+# service, so "which universe is the UI currently showing" is one
+# process-wide selection rather than a per-request field threaded
+# through every endpoint's request body. `POST /api/universe` changes
+# it; every endpoint below reads the panels/universe/benchmark for
+# whichever universe is currently active.
+_ACTIVE_UNIVERSE = universes.DEFAULT_UNIVERSE
 
 
 def _demo_forced() -> bool:
@@ -147,10 +154,42 @@ def app_js():
 
 @app.get("/api/status")
 def status():
-    st = _load_state()
+    st = _load_state(_ACTIVE_UNIVERSE)
     return {"mode": st["mode"], "as_of": st["as_of"],
             "universe_size": len(st["panels"]),
-            "history_years": config.HISTORY_YEARS}
+            "history_years": config.HISTORY_YEARS,
+            "universe_id": st["universe_id"],
+            "universe_name": universes.get(st["universe_id"]).name}
+
+
+@app.get("/api/universes")
+def universes_list():
+    """Registered universes for the webapp's selector (ROADMAP Item 15
+    Phase A) — `active` marks the one every other endpoint currently
+    reads from."""
+    return [{"id": u.id, "name": u.name, "active": u.id == _ACTIVE_UNIVERSE}
+           for u in universes.UNIVERSES.values()]
+
+
+class UniverseIn(BaseModel):
+    id: str
+
+
+@app.post("/api/universe")
+def set_active_universe(body: UniverseIn):
+    """Switches which universe every subsequent request reads from —
+    a process-wide selection, not per-request (see `_ACTIVE_UNIVERSE`'s
+    docstring above)."""
+    global _ACTIVE_UNIVERSE
+    if body.id not in universes.UNIVERSES:
+        return JSONResponse(
+            {"error": f"unknown universe {body.id!r}; must be one of "
+                      f"{sorted(universes.UNIVERSES)}"},
+            status_code=422)
+    _ACTIVE_UNIVERSE = body.id
+    st = _load_state(_ACTIVE_UNIVERSE)
+    return {"active": _ACTIVE_UNIVERSE, "mode": st["mode"],
+           "as_of": st["as_of"], "universe_size": len(st["panels"])}
 
 
 def _git_version() -> str:
@@ -169,7 +208,7 @@ def health():
     """Cheap JSON for cron/uptime monitoring — the nightly pipeline
     curls this after `update` to confirm the server actually picked up
     the fresh store (the P0 stale-server fix, verified live)."""
-    st = _load_state()
+    st = _load_state(_ACTIVE_UNIVERSE)
     mtime = st.get("_mtime")
     return {
         "mode": st["mode"],
@@ -224,7 +263,7 @@ def _run_screen(spec: dict) -> dict:
     """Everything /api/screen does for one already-validated spec —
     factored out so /api/screen_batch (ROADMAP Item 5) can run several
     presets without duplicating the matching/diffing/logging logic."""
-    st = _load_state()
+    st = _load_state(_ACTIVE_UNIVERSE)
     as_of = spec.get("as_of", "latest")
     logic = spec.get("logic", "AND")
     matches, near_misses = [], []
@@ -244,7 +283,8 @@ def _run_screen(spec: dict) -> dict:
             max(0, i - 19): i + 1].median()
         if (st["mode"] == "live"
                 and pd.notna(med_turnover)
-                and med_turnover < config.MIN_MEDIAN_TURNOVER_CR):
+                and med_turnover < config.liquidity_gate_cr(
+                    st["universe_id"])):
             liquidity_excluded += 1
             continue
         evaluated += 1
@@ -318,7 +358,7 @@ def _run_screen(spec: dict) -> dict:
                      f"NSE daily bars via Yahoo Finance, split/bonus "
                      f"adjusted, {config.HISTORY_YEARS}y history"),
             "liquidity_gate": f"20-day median turnover ≥ "
-                              f"₹{config.MIN_MEDIAN_TURNOVER_CR} cr",
+                              f"₹{config.liquidity_gate_cr(st['universe_id'])} cr",
             "nan_policy": "any missing input ⇒ condition fails "
                           "(insufficient history never matches)",
             "config_hash": config.config_hash(),
@@ -422,7 +462,7 @@ def allocate_endpoint(body: AllocateIn):
     engine. See allocate.py's module docstring and
     TECHNICAL_DESIGN.md §12d for the explicit non-goals (no MVO, no
     Kelly, no return forecasts, no auto-execution)."""
-    st = _load_state()
+    st = _load_state(_ACTIVE_UNIVERSE)
     as_of = body.as_of or st["as_of"]
     try:
         result = allocate.allocate(
@@ -503,14 +543,15 @@ def backtest_endpoint(body: BacktestIn):
         return JSONResponse({"error": "horizons must be non-empty"},
                            status_code=422)
 
-    st = _load_state()
+    st = _load_state(_ACTIVE_UNIVERSE)
     result = backtest.backtest_spec(
         st["panels"], st["universe"], spec,
         horizons=tuple(body.horizons), cooldown=body.cooldown,
         cost_pct=body.cost_pct, min_turnover_cr=body.min_turnover_cr,
         stride=body.stride, min_events=body.min_events,
         hypothesis=body.hypothesis, benchmark=st["benchmark"],
-        sensitivity=body.sensitivity)
+        sensitivity=body.sensitivity,
+        survivorship_note=universes.get(st["universe_id"]).survivorship_note)
     result["horizons"] = {str(h): v for h, v in result["horizons"].items()}
     result["mode"] = st["mode"]
     _log_backtest(body, result)
@@ -527,7 +568,7 @@ def chart(body: ChartIn):
     except dsl.DSLValidationError as exc:
         return JSONResponse({"error": str(exc)}, status_code=422)
 
-    st = _load_state()
+    st = _load_state(_ACTIVE_UNIVERSE)
     panel = st["panels"].get(body.symbol)
     if panel is None:
         return JSONResponse(
@@ -801,7 +842,7 @@ def watchlist_add(body: WatchlistIn):
     except dsl.DSLValidationError as exc:
         return JSONResponse({"error": str(exc)}, status_code=422)
 
-    st = _load_state()
+    st = _load_state(_ACTIVE_UNIVERSE)
     panel = st["panels"].get(body.symbol)
     if panel is None:
         return JSONResponse(
@@ -839,7 +880,7 @@ def watchlist_list():
     import json as _json
     if not WATCHLIST_FILE.exists():
         return []
-    st = _load_state()
+    st = _load_state(_ACTIVE_UNIVERSE)
     out = []
     for line in WATCHLIST_FILE.read_text().strip().splitlines():
         if not line:

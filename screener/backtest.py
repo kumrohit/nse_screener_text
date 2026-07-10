@@ -589,11 +589,19 @@ def backtest_spec(panels: dict[str, pd.DataFrame],
                   bootstrap_seed: int = BOOTSTRAP_SEED,
                   hypothesis: str | None = None,
                   benchmark: pd.Series | None = None,
-                  sensitivity: bool = True) -> dict:
+                  sensitivity: bool = True,
+                  survivorship_note: str | None = None) -> dict:
     """(panels, universe, spec) -> events + per-horizon stats + sensitivity
     grid + survivorship caveat. Pure function, no I/O. `screen` is
     re-validated defensively since a caller-supplied dict may not have
-    gone through dsl.validate yet."""
+    gone through dsl.validate yet.
+
+    `survivorship_note` defaults to the nifty500-worded module constant
+    for backward compatibility, but callers screening a different
+    universe (ROADMAP Item 15 Phase A) must pass that universe's own
+    note — the nifty500 wording is actively wrong for, say, nse_full's
+    much heavier churn, and printing the wrong caveat is worse than
+    printing none."""
     t0 = time.perf_counter()
     screen = dsl.validate(_copy.deepcopy(screen))
     sector_by_symbol = (universe.set_index("symbol")["industry"]
@@ -688,7 +696,7 @@ def backtest_spec(panels: dict[str, pd.DataFrame],
         "spec_hash": dsl.spec_hash(screen),
         "english": dsl.describe(screen),
         "hypothesis": hypothesis,
-        "survivorship_note": SURVIVORSHIP_NOTE,
+        "survivorship_note": survivorship_note or SURVIVORSHIP_NOTE,
         "cooldown": cooldown, "cost_pct": cost_pct,
         "min_turnover_cr": min_turnover_cr, "stride": stride,
         "n_symbols": len(symbols), "n_events_total": int(len(events_df)),

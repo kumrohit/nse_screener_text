@@ -171,7 +171,7 @@ def cmd_screen(args) -> None:
     panels = indicators.build_panels(prices)
     result = evaluator.run_screen(
         panels, spec, universe=uni,
-        min_turnover_cr=config.MIN_MEDIAN_TURNOVER_CR,
+        min_turnover_cr=config.liquidity_gate_cr(universe_id),
         benchmark=data_ingest.load_benchmark(universe_id))
 
     as_of = spec.get("as_of", "latest")
@@ -211,10 +211,11 @@ def cmd_backtest(args) -> None:
     result = bt.backtest_spec(
         panels, uni, spec, horizons=tuple(args.horizons),
         cooldown=args.cooldown, cost_pct=args.cost_pct,
-        min_turnover_cr=config.MIN_MEDIAN_TURNOVER_CR, stride=args.stride,
+        min_turnover_cr=config.liquidity_gate_cr(universe_id), stride=args.stride,
         min_events=args.min_events, hypothesis=args.hypothesis,
         benchmark=data_ingest.load_benchmark(universe_id),
-        sensitivity=not args.no_sensitivity)
+        sensitivity=not args.no_sensitivity,
+        survivorship_note=universes.get(universe_id).survivorship_note)
 
     print(f"\n{result['n_symbols']} symbols, {result['n_events_total']} "
          f"events total ({result['elapsed_sec']}s)")

@@ -563,6 +563,71 @@ class TestHealthEndpoint:
         assert "config_hash" in j
 
 
+class TestUniverseEndpoints:
+    """ROADMAP Item 15 Phase A: the webapp universe selector."""
+    client = TestClient(app)
+
+    def _reset(self):
+        from screener import universes, webapp
+        webapp._ACTIVE_UNIVERSE = universes.DEFAULT_UNIVERSE
+        webapp._state.clear()
+
+    def test_list_universes_includes_registered_ones(self):
+        r = self.client.get("/api/universes")
+        assert r.status_code == 200
+        ids = {u["id"] for u in r.json()}
+        assert {"nifty500", "nse_full"} <= ids
+        assert sum(u["active"] for u in r.json()) == 1
+
+    def test_unknown_universe_422s(self):
+        r = self.client.post("/api/universe", json={"id": "bogus"})
+        assert r.status_code == 422
+
+    def test_switch_falls_back_to_demo_without_a_real_store(
+            self, tmp_path, monkeypatch):
+        """nse_full's real store exists on THIS dev machine (Item 15
+        Phase A backfilled it), so this test must not depend on that —
+        point DATA_DIR at an empty tmp dir so nse_full correctly falls
+        back to demo mode here, the same way it would in CI."""
+        from screener import config
+        monkeypatch.setattr(config, "DATA_DIR", tmp_path)
+        try:
+            r = self.client.post("/api/universe", json={"id": "nse_full"})
+            assert r.status_code == 200
+            j = r.json()
+            assert j["active"] == "nse_full" and j["mode"] == "demo"
+
+            status = self.client.get("/api/status").json()
+            assert status["universe_id"] == "nse_full"
+            assert status["universe_name"] == "NSE Full (all EQ series)"
+
+            listing = self.client.get("/api/universes").json()
+            active = [u for u in listing if u["active"]]
+            assert active == [{"id": "nse_full",
+                              "name": "NSE Full (all EQ series)",
+                              "active": True}]
+        finally:
+            self._reset()
+
+    def test_backtest_survivorship_note_matches_active_universe(
+            self, tmp_path, monkeypatch):
+        """Regression: the backtest endpoint used to always print the
+        nifty500-worded survivorship caveat regardless of which
+        universe was actually active — caught via live testing."""
+        from screener import config
+        monkeypatch.setattr(config, "DATA_DIR", tmp_path)
+        try:
+            self.client.post("/api/universe", json={"id": "nse_full"})
+            r = self.client.post("/api/backtest", json={
+                "spec": {"conditions": [
+                    {"type": "trend", "direction": "up"}]},
+                "horizons": [5], "sensitivity": False})
+            assert r.status_code == 200
+            assert "NSE EQ-series" in r.json()["survivorship_note"]
+        finally:
+            self._reset()
+
+
 # ---------------------------------------------------------------- verify
 from screener import verify  # noqa: E402
 

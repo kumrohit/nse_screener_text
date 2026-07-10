@@ -23,8 +23,8 @@ class TestRegistry:
         assert "delisted" in u.survivorship_note
 
     def test_unknown_universe_raises_with_helpful_message(self):
-        with pytest.raises(ValueError, match="nse_full"):
-            universes.get("nse_full")
+        with pytest.raises(ValueError, match="bogus_universe"):
+            universes.get("bogus_universe")
 
     def test_default_universe_constant_is_registered(self):
         assert universes.DEFAULT_UNIVERSE in universes.UNIVERSES
@@ -109,14 +109,23 @@ class TestLegacyMigration:
 class TestUniverseFetchThreading:
     def test_fetch_universe_reads_from_universe_id_path(self, tmp_path,
                                                          monkeypatch):
+        # nse_full (not the default universe) so config.universe_file()
+        # actually recomputes from DATA_DIR rather than deferring to the
+        # UNIVERSE_FILE attribute the way it does for the default.
         from screener import universe as uni_mod
         data_dir = tmp_path / "data"
-        (data_dir / "acme").mkdir(parents=True)
-        (data_dir / "acme" / "universe.csv").write_text(
-            "symbol,name,industry,yf_ticker\nFOO,Foo Ltd,Services,FOO.NS\n")
+        (data_dir / "nse_full").mkdir(parents=True)
+        (data_dir / "nse_full" / "universe.csv").write_text(
+            "symbol,name,industry,yf_ticker\nFOO,Foo Ltd,,FOO.NS\n")
         monkeypatch.setattr(config, "DATA_DIR", data_dir)
-        df = uni_mod.fetch_universe(universe_id="acme")
+        df = uni_mod.fetch_universe(universe_id="nse_full")
         assert list(df["symbol"]) == ["FOO"]
+
+    def test_fetch_universe_unknown_id_raises(self, tmp_path, monkeypatch):
+        from screener import universe as uni_mod
+        monkeypatch.setattr(config, "DATA_DIR", tmp_path / "data")
+        with pytest.raises(ValueError, match="no symbol-list fetcher"):
+            uni_mod.fetch_universe(universe_id="bogus_universe")
 
 
 class TestScreenLogUniverseField:
@@ -173,7 +182,82 @@ class TestCLIUniverseFlag:
         from screener import cli
         monkeypatch.setattr(sys, "argv", [
             "screener", "screen", "--json", "--dry-run",
-            "--universe", "nse_full",
+            "--universe", "bogus_universe",
             '{"conditions":[{"type":"trend","direction":"up"}]}'])
         with pytest.raises(SystemExit):
             cli.main()
+
+    def test_screen_dry_run_accepts_nse_full(self, capsys, monkeypatch):
+        from screener import cli
+        monkeypatch.setattr(sys, "argv", [
+            "screener", "screen", "--json", "--dry-run",
+            "--universe", "nse_full",
+            '{"conditions":[{"type":"trend","direction":"up"}]}'])
+        cli.main()  # dry-run: must not raise, no data access needed
+        out = capsys.readouterr().out
+        assert "uptrend" in out
+
+
+class TestNseFullUniverse:
+    def test_registered_with_stricter_liquidity_gate(self):
+        u = universes.get("nse_full")
+        assert u.id == "nse_full"
+        assert u.liquidity_gate_cr > universes.get("nifty500").liquidity_gate_cr
+        assert "sector" in u.survivorship_note.lower()
+
+    def test_fetch_filters_to_eq_series_and_leaves_industry_empty(
+            self, tmp_path, monkeypatch):
+        from screener import universe as uni_mod
+
+        raw_csv = (
+            "SYMBOL,NAME OF COMPANY, SERIES, DATE OF LISTING, "
+            "PAID UP VALUE, MARKET LOT, ISIN NUMBER, FACE VALUE\n"
+            "FOO,Foo Limited,EQ,01-JAN-2000,10,1,INE000000001,10\n"
+            "BAR,Bar Limited,BE,01-JAN-2000,10,1,INE000000002,10\n"
+        )
+
+        class _FakeResp:
+            status_code = 200
+            text = raw_csv
+            def raise_for_status(self): pass
+
+        monkeypatch.setattr(uni_mod.requests, "get",
+                            lambda *a, **k: _FakeResp())
+        ufile = tmp_path / "nse_full" / "universe.csv"
+        df = uni_mod._fetch_nse_full(force_refresh=True, ufile=ufile)
+
+        assert list(df["symbol"]) == ["FOO"]  # BE series excluded
+        assert df["yf_ticker"].iloc[0] == "FOO.NS"
+        assert df["industry"].isna().all()
+        assert ufile.exists()  # cached for next call
+
+    def test_fetch_falls_back_to_cache_on_network_failure(self, tmp_path,
+                                                           monkeypatch):
+        from screener import universe as uni_mod
+        data_dir = tmp_path / "data"
+        (data_dir / "nse_full").mkdir(parents=True)
+        (data_dir / "nse_full" / "universe.csv").write_text(
+            "symbol,name,industry,yf_ticker\nCACHED,Cached Ltd,,CACHED.NS\n")
+        monkeypatch.setattr(config, "DATA_DIR", data_dir)
+
+        def _boom(*a, **k):
+            raise ConnectionError("offline")
+        monkeypatch.setattr(uni_mod.requests, "get", _boom)
+
+        df = uni_mod.fetch_universe(force_refresh=True, universe_id="nse_full")
+        assert list(df["symbol"]) == ["CACHED"]
+
+
+class TestLiquidityGateThreading:
+    def test_default_universe_defers_to_overridable_constant(self,
+                                                              monkeypatch):
+        monkeypatch.setattr(config, "MIN_MEDIAN_TURNOVER_CR", 1.25)
+        assert config.liquidity_gate_cr() == 1.25
+        assert config.liquidity_gate_cr("nifty500") == 1.25
+
+    def test_nse_full_uses_its_own_registry_value_not_the_global(self,
+                                                                  monkeypatch):
+        monkeypatch.setattr(config, "MIN_MEDIAN_TURNOVER_CR", 1.25)
+        assert config.liquidity_gate_cr("nse_full") == \
+            universes.get("nse_full").liquidity_gate_cr
+        assert config.liquidity_gate_cr("nse_full") != 1.25
