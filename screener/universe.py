@@ -19,6 +19,28 @@ from . import config
 from .universes import DEFAULT_UNIVERSE
 
 NSE_FULL_URL = "https://nsearchives.nseindia.com/content/equities/EQUITY_L.csv"
+NSE_ETF_URL = "https://nsearchives.nseindia.com/content/equities/eq_etfseclist.csv"
+
+# Curated, hand-verified broad domestic equity-index ETFs (ROADMAP
+# Item 15 Phase A follow-up). NOT auto-classified from eq_etfseclist.csv's
+# `Underlying` column: fetched live 2026-07-10, that column mixes fund
+# names into what should be index names for a large share of its ~330
+# rows (inconsistent spelling/casing on top of that), too unreliable to
+# keyword-classify. Each symbol below was cross-checked against that
+# live fetch and tracks a well-known broad domestic index (Nifty 50/100/
+# Next 50/Bank/PSU Bank/IT/Infra/Midcap150/Healthcare, or Sensex).
+# Deliberately excludes gold/silver/commodity/debt/international-index/
+# money-market ETFs — "equity-index ETFs only" per the v1 scope decision.
+NSE_ETF_SYMBOLS = frozenset({
+    "NIFTYBEES", "NIFTYIETF", "NIFTYETF", "NIFTY1", "NIFTYBETA", "QNIFTY",
+    "SETFNIF50", "HDFCNIFTY", "BSLNIFTY", "IVZINNIFTY", "LICNETFN50",
+    "NIF100BEES", "NIF100IETF", "LICNFNHGP",
+    "BANKBEES", "BANKNIFTY1", "ABSLBANETF", "BNKETFAXIS", "SETFNIFBK",
+    "NEXT50", "NEXT50BETA", "NEXT50IETF", "ABSLNN50ET", "SETFNN50",
+    "ITBEES", "INFRABEES", "MID150BEES", "MIDCAPIETF",
+    "PSUBANK", "PSUBNKBEES", "HEALTHAXIS", "HEALTHIETF",
+    "HDFCSENSEX", "LICNETFSEN", "SENSEXBETA", "SENSEXIETF",
+})
 
 _HEADERS = {
     "User-Agent": (
@@ -99,9 +121,44 @@ def _fetch_nse_full(force_refresh: bool, ufile) -> pd.DataFrame:
     return df
 
 
+def _fetch_nse_etf(force_refresh: bool, ufile) -> pd.DataFrame:
+    """The curated NSE_ETF_SYMBOLS list, cross-referenced against a
+    live fetch of NSE's ETF listing for current names — the live fetch
+    supplies fresh metadata, but the *set* of symbols is the curated
+    list, not whatever NSE's Underlying column would classify."""
+    if ufile.exists() and not force_refresh:
+        return pd.read_csv(ufile)
+    try:
+        raw = _fetch_csv(NSE_ETF_URL, ufile)
+    except Exception as exc:  # noqa: BLE001
+        if ufile.exists():
+            print(f"[universe] refresh failed ({exc}); using cached list",
+                  file=sys.stderr)
+            return pd.read_csv(ufile)
+        raise RuntimeError(
+            "Could not fetch the NSE ETF list and no cached copy exists. "
+            f"Download eq_etfseclist.csv manually from NSE and place it "
+            f"at {ufile}."
+        ) from exc
+
+    raw.columns = [c.strip() for c in raw.columns]
+    raw["Symbol"] = raw["Symbol"].astype(str).str.strip()
+    sub = raw[raw["Symbol"].isin(NSE_ETF_SYMBOLS)].copy()
+    df = pd.DataFrame({
+        "symbol": sub["Symbol"],
+        "name": sub["SecurityName"].astype(str).str.strip(),
+        "industry": pd.Series(dtype=str, index=sub.index),
+    })
+    df["yf_ticker"] = df["symbol"] + config.YF_SUFFIX
+    ufile.parent.mkdir(parents=True, exist_ok=True)
+    df.to_csv(ufile, index=False)
+    return df
+
+
 _FETCHERS = {
     "nifty500": _fetch_nifty500,
     "nse_full": _fetch_nse_full,
+    "nse_etf": _fetch_nse_etf,
 }
 
 

@@ -17,7 +17,8 @@ one; `"sources": []` is a legitimate, honest value.
 """
 from __future__ import annotations
 
-from . import dsl
+from . import dsl, universes
+from .evaluator import SECTOR_DEPENDENT_TYPES
 
 PRESETS: list[dict] = [
     {
@@ -631,10 +632,28 @@ PRESETS: list[dict] = [
     },
 ]
 
+# Which universes a preset is meaningful on (ROADMAP Item 15 follow-up).
+# Computed from the spec, not hand-tagged per preset: a preset that uses
+# a sector/sector_rank condition only makes sense on a universe that
+# actually carries sector/industry data (today: nifty500 only — nse_full's
+# raw NSE listing has none, see evaluator.sector_data_gap_warning). This
+# way a newly-added preset is tagged correctly automatically instead of
+# relying on someone remembering to set a field by hand.
+_SECTOR_ONLY_UNIVERSES = (universes.DEFAULT_UNIVERSE,)
+
+
+def _preset_universes(spec: dict) -> list[str]:
+    uses_sector = any(c.get("type") in SECTOR_DEPENDENT_TYPES
+                      for c in spec.get("conditions", []))
+    ids = _SECTOR_ONLY_UNIVERSES if uses_sector else tuple(universes.UNIVERSES)
+    return list(ids)
+
+
 # fail fast: an invalid preset is a bug, not a runtime condition
 _BY_ID = {}
 for _p in PRESETS:
     dsl.validate(_p["spec"])
+    _p["universes"] = _preset_universes(_p["spec"])
     _BY_ID[_p["id"]] = _p
 
 

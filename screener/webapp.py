@@ -230,7 +230,8 @@ def presets_list():
     return [{"id": p["id"], "name": p["name"], "group": p["group"],
              "description": p["description"], "spec": p["spec"],
              "english": dsl.describe(p["spec"]),
-             "evidence": p.get("evidence")}
+             "evidence": p.get("evidence"),
+             "universes": p.get("universes")}
             for p in presets.PRESETS]
 
 
@@ -338,11 +339,13 @@ def _run_screen(spec: dict) -> dict:
     _log_run(spec, st["as_of"] if as_of == "latest" else as_of,
              {"matched": len(matches), "evaluated": evaluated}, matches,
              spec_h, st["universe_id"])
+    sector_warning = evaluator.sector_data_gap_warning(spec, st["universe"])
     return {
         "english": dsl.describe(spec),
         "spec": spec,
         "as_of": st["as_of"] if as_of == "latest" else as_of,
         "mode": st["mode"],
+        "warnings": [sector_warning] if sector_warning else [],
         "stats": {"universe": len(st["panels"]),
                   "liquidity_excluded": liquidity_excluded,
                   "evaluated": evaluated,
@@ -554,6 +557,8 @@ def backtest_endpoint(body: BacktestIn):
         survivorship_note=universes.get(st["universe_id"]).survivorship_note)
     result["horizons"] = {str(h): v for h, v in result["horizons"].items()}
     result["mode"] = st["mode"]
+    sector_warning = evaluator.sector_data_gap_warning(spec, st["universe"])
+    result["warnings"] = [sector_warning] if sector_warning else []
     _log_backtest(body, result)
     return result
 

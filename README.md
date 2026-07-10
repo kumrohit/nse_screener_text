@@ -159,16 +159,20 @@ universe so everything above is explorable immediately after clone.
 
 **Universe selector** — a dropdown in the header switches the whole app
 between registered universes: **Nifty 500** (500 large/mid/small-cap
-names, ₹0.5cr liquidity gate) and **NSE Full** (all 2,047 NSE EQ-series
-symbols, a stricter ₹2cr gate for its much longer tail of thin names,
-and no sector/industry data — NSE's raw listing doesn't carry a
-classification the way the Nifty 500 index does, so sector-based
-screens won't match anything there). The dropdown is hidden until a
-second universe is actually backfilled (`--universe nse_full` on
-`backfill`, see below). Switching resets any in-progress screen; the
-first switch to a universe in a given server run takes a couple of
-minutes (building indicators for every symbol) and is instant after
-that.
+names, ₹0.5cr liquidity gate), **NSE Full** (all 2,047 NSE EQ-series
+symbols, a stricter ₹2cr gate for its much longer tail of thin names),
+and **NSE Equity ETFs** (36 curated broad domestic equity-index ETFs —
+NIFTYBEES, BANKBEES, and the like — ₹0.1cr gate). Neither NSE Full nor
+the ETF universe carries sector/industry data (NSE's raw listings don't
+have a classification the way the Nifty 500 index does), so a
+sector-based screen on either warns loudly instead of silently matching
+nothing, and the two sector-dependent presets hide themselves from the
+dropdown when either is active. The universe dropdown itself is hidden
+until a second universe is actually backfilled (`--universe nse_full`
+or `--universe nse_etf` on `backfill`, see below). Switching resets any
+in-progress screen; the first switch to a universe in a given server
+run takes a couple of minutes for a large universe (building indicators
+for every symbol) and is instant after that.
 
 ## CLI usage
 
@@ -200,8 +204,9 @@ python -m screener.cli backtest "taking support at 50 EMA and in an uptrend" \
   --hypothesis "expect modest positive 20-bar excess, pullback-continuation setup"
 python -m screener.cli backtest --preset flat_base_52w --horizons 5 20 60 --no-sensitivity
 
-# a second universe: backfill once, then screen/backtest it like any other
+# other universes: backfill once, then screen/backtest like any other
 python -m screener.cli backfill --universe nse_full     # ~15 min, 2,047 symbols
+python -m screener.cli backfill --universe nse_etf      # <1 min, 36 curated ETFs
 python -m screener.cli screen --universe nse_full "oversold stocks near their 52 week low"
 ```
 
@@ -238,7 +243,7 @@ Anything it can't map to the documented vocabulary — P/E ratios, news, "good m
 
 ## Data
 
-Nifty 500 constituents from NSE's official index CSV; daily OHLCV from Yahoo Finance (`.NS`), split/bonus-adjusted; Nifty 50 index for relative strength. Before any screen runs the tool checks the store isn't stale and applies a liquidity gate. Known caveats (yfinance reliability, a few NSE↔Yahoo ticker mismatches, survivorship in historical screens) are documented in [TECHNICAL_DESIGN.md §4](TECHNICAL_DESIGN.md). Each universe (Nifty 500, NSE Full) keeps its own store under `data/{universe_id}/` — see [TECHNICAL_DESIGN.md §12g](TECHNICAL_DESIGN.md) for the registry that manages this.
+Nifty 500 constituents from NSE's official index CSV; daily OHLCV from Yahoo Finance (`.NS`), split/bonus-adjusted; Nifty 50 index for relative strength. Before any screen runs the tool checks the store isn't stale and applies a liquidity gate. Known caveats (yfinance reliability, a few NSE↔Yahoo ticker mismatches, survivorship in historical screens) are documented in [TECHNICAL_DESIGN.md §4](TECHNICAL_DESIGN.md). Each universe (Nifty 500, NSE Full, NSE Equity ETFs) keeps its own store under `data/{universe_id}/` — see [TECHNICAL_DESIGN.md §12g](TECHNICAL_DESIGN.md) for the registry that manages this.
 
 An NSE bhavcopy-based data layer (official OHLCV + delivery %, our own corporate-action adjustment) is being built and validated **side by side** with the store above via `python -m screener.cli bhavcopy-update` — it isn't used by any screen yet. See [TECHNICAL_DESIGN.md §4a](TECHNICAL_DESIGN.md).
 
@@ -256,7 +261,7 @@ Unknown keys are flagged and ignored rather than silently doing nothing. The eff
 ## Tests
 
 ```bash
-python -m pytest tests/                    # 236 tests: synthetic series with known answers,
+python -m pytest tests/                    # 252 tests: synthetic series with known answers,
                                            # evidence-layer agreement, web API contract,
                                            # allocation-engine invariants, backtester
                                            # methodology (event dedup, entry convention,

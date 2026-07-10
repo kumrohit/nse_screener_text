@@ -256,6 +256,35 @@ CROSS_SECTIONAL_TYPES = {"sector", "rs_percentile", "sector_rank",
 _CROSS_SECTION_WINDOWED_TYPES = ("rs_percentile", "sector_rank",
                                  "atr_pct_percentile")
 
+# Condition types that need an actual sector/industry classification to
+# mean anything (unlike rs_percentile/atr_pct_percentile, which rank on
+# price/volatility and work with no sector data at all). NSE's raw
+# full-equity listing (the nse_full universe, ROADMAP Item 15) carries no
+# such classification — these conditions would silently match nothing
+# there rather than erroring, which is worse than useless. See
+# `sector_data_gap_warning`.
+SECTOR_DEPENDENT_TYPES = {"sector", "sector_rank"}
+
+
+def sector_data_gap_warning(screen: dict,
+                            universe: pd.DataFrame | None) -> str | None:
+    """None if the spec doesn't need sector data, or the universe has
+    some. Otherwise a warning string: the condition will never match,
+    not because nothing qualifies today but because the data to
+    evaluate it doesn't exist for this universe at all — a screen
+    silently returning zero matches for that reason looks identical to
+    a screen that's just strict, which is the exact confusion this
+    guards against."""
+    if universe is None or "industry" not in universe.columns:
+        return None
+    uses_sector = any(c.get("type") in SECTOR_DEPENDENT_TYPES
+                      for c in screen.get("conditions", []))
+    if not uses_sector or universe["industry"].notna().any():
+        return None
+    return ("This universe has no sector/industry classification data, "
+           "so sector-based conditions in this screen can never match "
+           "(not because nothing currently qualifies).")
+
 # weekly trend uses the weekly panel's own EMA set
 def _weekly_trend(wpanel, c, i) -> bool:
     close = wpanel["close"].iloc[i]

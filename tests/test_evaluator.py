@@ -17,7 +17,8 @@ import sys
 sys.path.insert(0, "/home/claude/nse_screener")
 
 from screener import dsl, indicators                       # noqa: E402
-from screener.evaluator import evaluate_symbol, run_screen  # noqa: E402
+from screener.evaluator import (evaluate_symbol, run_screen,  # noqa: E402
+                                sector_data_gap_warning)
 
 RNG = np.random.default_rng(42)
 
@@ -931,6 +932,29 @@ class TestPresets:
             rr = client.post("/api/screen", json={"spec": i["spec"]})
             assert rr.status_code == 200, i["id"]
 
+    def test_universes_tag_computed_from_sector_usage(self):
+        """ROADMAP Item 15 follow-up: a preset using sector/sector_rank
+        is tagged nifty500-only (the only universe with sector data
+        today); everything else is tagged for every registered
+        universe. Computed from the spec, not hand-maintained."""
+        from screener import evaluator, presets, universes as universes_mod
+        sector_ids = {p["id"] for p in presets.PRESETS
+                     if any(c.get("type") in evaluator.SECTOR_DEPENDENT_TYPES
+                           for c in p["spec"]["conditions"])}
+        assert sector_ids == {"sector_leader_pullback", "lagging_sector_bounce"}
+        for p in presets.PRESETS:
+            if p["id"] in sector_ids:
+                assert p["universes"] == [universes_mod.DEFAULT_UNIVERSE]
+            else:
+                assert set(p["universes"]) == set(universes_mod.UNIVERSES)
+
+    def test_presets_endpoint_includes_universes_field(self):
+        client = TestClient(app)
+        items = client.get("/api/presets").json()
+        by_id = {i["id"]: i for i in items}
+        assert by_id["sector_leader_pullback"]["universes"] == ["nifty500"]
+        assert "nse_full" in by_id["support_50ema_uptrend"]["universes"]
+
     def test_pattern_explain(self):
         from screener import explain
         p = _candle_panel([(100, 106, 94, 103), (101, 104, 96, 99)])
@@ -1108,6 +1132,58 @@ class TestBacktestEndpoint:
         assert entry["spec_hash"] and entry["hypothesis"] == \
             "expect positive drift continuation"
         assert "horizons" in entry and "n_events_total" in entry
+
+
+class TestSectorDataGapWarningEndpoints:
+    """Live-endpoint version of TestSectorDataGapWarning: a universe
+    with no industry data (like nse_full) must surface the warning in
+    the actual /api/screen and /api/backtest responses, not just at
+    the helper-function level."""
+    client = TestClient(app)
+
+    def _patch_no_industry_demo(self, monkeypatch):
+        from screener import demo, webapp
+        panels, uni, bench = demo.build_demo()
+        uni = uni.copy()
+        uni["industry"] = None
+        monkeypatch.setattr(demo, "build_demo",
+                            lambda: (panels, uni, bench))
+        webapp._state.clear()
+
+    def test_screen_warns_on_sector_condition(self, monkeypatch):
+        self._patch_no_industry_demo(monkeypatch)
+        try:
+            r = self.client.post("/api/screen", json={"spec": {
+                "conditions": [{"type": "sector_rank", "top": 3}]}})
+            assert r.status_code == 200
+            assert any("sector" in w.lower() for w in r.json()["warnings"])
+        finally:
+            from screener import webapp
+            webapp._state.clear()
+
+    def test_screen_no_warning_for_non_sector_spec(self, monkeypatch):
+        self._patch_no_industry_demo(monkeypatch)
+        try:
+            r = self.client.post("/api/screen", json={"spec": {
+                "conditions": [{"type": "trend", "direction": "up"}]}})
+            assert r.status_code == 200
+            assert r.json()["warnings"] == []
+        finally:
+            from screener import webapp
+            webapp._state.clear()
+
+    def test_backtest_warns_on_sector_condition(self, monkeypatch):
+        self._patch_no_industry_demo(monkeypatch)
+        try:
+            r = self.client.post("/api/backtest", json={
+                "spec": {"conditions": [
+                    {"type": "sector_rank", "top": 3}]},
+                "horizons": [5], "sensitivity": False})
+            assert r.status_code == 200
+            assert any("sector" in w.lower() for w in r.json()["warnings"])
+        finally:
+            from screener import webapp
+            webapp._state.clear()
 
 
 class TestScreenBatch:
@@ -1339,6 +1415,47 @@ def _sector_universe():
                    + ["Sector C"] * 3,
     })
     return panels, uni
+
+
+class TestSectorDataGapWarning:
+    """ROADMAP Item 15 sequencing follow-up: nse_full has no sector/
+    industry data, so sector conditions must warn loudly rather than
+    silently return zero matches."""
+
+    def _uni(self, industries):
+        return pd.DataFrame({"symbol": [f"S{i}" for i in range(len(industries))],
+                            "name": [f"S{i}" for i in range(len(industries))],
+                            "industry": industries})
+
+    def test_none_when_spec_has_no_sector_conditions(self):
+        spec = {"conditions": [{"type": "trend", "direction": "up"}]}
+        uni = self._uni([None, None])
+        assert sector_data_gap_warning(spec, uni) is None
+
+    def test_none_when_universe_has_some_industry_data(self):
+        spec = {"conditions": [{"type": "sector_rank", "top": 3}]}
+        uni = self._uni(["IT", "Metals"])
+        assert sector_data_gap_warning(spec, uni) is None
+
+    def test_warns_when_sector_rank_used_and_no_industry_data(self):
+        spec = {"conditions": [{"type": "sector_rank", "top": 3}]}
+        uni = self._uni([None, None, float("nan")])
+        w = sector_data_gap_warning(spec, uni)
+        assert w is not None and "sector" in w.lower()
+
+    def test_warns_when_plain_sector_condition_used(self):
+        spec = {"conditions": [{"type": "sector", "in": ["IT"]}]}
+        uni = self._uni([None, None])
+        assert sector_data_gap_warning(spec, uni) is not None
+
+    def test_none_when_universe_is_none(self):
+        spec = {"conditions": [{"type": "sector_rank", "top": 3}]}
+        assert sector_data_gap_warning(spec, None) is None
+
+    def test_none_when_universe_missing_industry_column(self):
+        spec = {"conditions": [{"type": "sector_rank", "top": 3}]}
+        uni = pd.DataFrame({"symbol": ["S0"], "name": ["S0"]})
+        assert sector_data_gap_warning(spec, uni) is None
 
 
 class TestCrossSection:

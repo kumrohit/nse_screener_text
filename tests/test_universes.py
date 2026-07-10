@@ -197,6 +197,16 @@ class TestCLIUniverseFlag:
         out = capsys.readouterr().out
         assert "uptrend" in out
 
+    def test_screen_dry_run_accepts_nse_etf(self, capsys, monkeypatch):
+        from screener import cli
+        monkeypatch.setattr(sys, "argv", [
+            "screener", "screen", "--json", "--dry-run",
+            "--universe", "nse_etf",
+            '{"conditions":[{"type":"trend","direction":"up"}]}'])
+        cli.main()
+        out = capsys.readouterr().out
+        assert "uptrend" in out
+
 
 class TestNseFullUniverse:
     def test_registered_with_stricter_liquidity_gate(self):
@@ -245,6 +255,67 @@ class TestNseFullUniverse:
         monkeypatch.setattr(uni_mod.requests, "get", _boom)
 
         df = uni_mod.fetch_universe(force_refresh=True, universe_id="nse_full")
+        assert list(df["symbol"]) == ["CACHED"]
+
+
+class TestNseEtfUniverse:
+    def test_registered_as_an_equity_index_universe(self):
+        u = universes.get("nse_etf")
+        assert u.id == "nse_etf"
+        assert u.benchmark_ticker == "^NSEI"
+        assert "equity-index" in u.survivorship_note.lower() or \
+            "curated" in u.survivorship_note.lower()
+
+    def test_fetch_filters_to_curated_symbols_only(self, tmp_path,
+                                                    monkeypatch):
+        from screener import universe as uni_mod
+
+        raw_csv = (
+            "Symbol,Underlying,SecurityName,DateofListing,MarketLot,"
+            "ISINNumber,FaceValue\n"
+            "NIFTYBEES,Nifty50,NIPINDETFNIFTYBEES,08-Jan-02,1,"
+            "INF204KB14I2,1\n"
+            "GOLDBEES,Gold,NIPINDETFGOLDBEES,19-Mar-07,1,INF204KB17I5,1\n"
+        )
+
+        class _FakeResp:
+            status_code = 200
+            text = raw_csv
+            def raise_for_status(self): pass
+
+        monkeypatch.setattr(uni_mod.requests, "get",
+                            lambda *a, **k: _FakeResp())
+        ufile = tmp_path / "nse_etf" / "universe.csv"
+        df = uni_mod._fetch_nse_etf(force_refresh=True, ufile=ufile)
+
+        # NIFTYBEES is in the curated whitelist, GOLDBEES is not (gold,
+        # excluded by the "equity-index ETFs only" v1 scope) even though
+        # both are present in the raw NSE fetch.
+        assert list(df["symbol"]) == ["NIFTYBEES"]
+        assert df["yf_ticker"].iloc[0] == "NIFTYBEES.NS"
+        assert df["industry"].isna().all()
+
+    def test_curated_symbol_set_excludes_known_non_equity_etfs(self):
+        from screener.universe import NSE_ETF_SYMBOLS
+        assert "GOLDBEES" not in NSE_ETF_SYMBOLS
+        assert "LIQUIDBEES" not in NSE_ETF_SYMBOLS
+        assert "NIFTYBEES" in NSE_ETF_SYMBOLS
+        assert "BANKBEES" in NSE_ETF_SYMBOLS
+
+    def test_fetch_falls_back_to_cache_on_network_failure(self, tmp_path,
+                                                           monkeypatch):
+        from screener import universe as uni_mod
+        data_dir = tmp_path / "data"
+        (data_dir / "nse_etf").mkdir(parents=True)
+        (data_dir / "nse_etf" / "universe.csv").write_text(
+            "symbol,name,industry,yf_ticker\nCACHED,Cached Ltd,,CACHED.NS\n")
+        monkeypatch.setattr(config, "DATA_DIR", data_dir)
+
+        def _boom(*a, **k):
+            raise ConnectionError("offline")
+        monkeypatch.setattr(uni_mod.requests, "get", _boom)
+
+        df = uni_mod.fetch_universe(force_refresh=True, universe_id="nse_etf")
         assert list(df["symbol"]) == ["CACHED"]
 
 

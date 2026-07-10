@@ -4,12 +4,16 @@ Every screenable universe is a config entry, not an if-branch scattered
 through the codebase. Started with exactly one universe, `nifty500`,
 to prove the abstraction (per-universe storage, `--universe` threading
 through the CLI, a state cache keyed by universe) with **zero behaviour
-change** before onboarding a second one. `nse_full` is that second
-universe: all NSE EQ-series symbols (~2,000+, vs. Nifty 500's 500),
-sourced from NSE's own listing archive rather than the index-membership
-CSV nifty500 uses (see `universe.py`'s per-universe fetch dispatch) and
-backfilled via the same yfinance pipeline as nifty500 — no new
-adjustment-correctness code, just a bigger symbol list.
+change** before onboarding more. `nse_full`: all NSE EQ-series symbols
+(~2,000+, vs. Nifty 500's 500), sourced from NSE's own listing archive
+rather than the index-membership CSV nifty500 uses (see `universe.py`'s
+per-universe fetch dispatch) and backfilled via the same yfinance
+pipeline as nifty500 — no new adjustment-correctness code, just a
+bigger symbol list. `nse_etf`: a curated list of ~36 broad domestic
+equity-index ETFs (NIFTYBEES, BANKBEES, etc.) — curated rather than
+auto-fetched-and-classified because NSE's ETF listing's `Underlying`
+column mixes fund names into what should be index names for a large
+share of rows, too inconsistent to classify reliably by keyword.
 
 `liquidity_gate_cr` is the first field that earns its place on
 `Universe`: nse_full's much longer tail of thin, sometimes-barely-traded
@@ -73,6 +77,24 @@ UNIVERSES: dict[str, Universe] = {
             "universe (NSE's raw listing doesn't carry one), so "
             "sector-based screens will find nothing to match. Treat "
             "results as more exploratory and noisier than Nifty 500's."
+        ),
+    ),
+    "nse_etf": Universe(
+        id="nse_etf",
+        name="NSE Equity ETFs",
+        benchmark_ticker="^NSEI",
+        liquidity_gate_cr=0.1,
+        survivorship_note=(
+            "Survivorship note: this is a curated, hand-verified list "
+            "of broad domestic equity-index ETFs (NSE's own ETF "
+            "listing carries no reliable machine-classifiable index "
+            "field — see universe.py — so this is not an automatic "
+            "fetch), deliberately excluding gold/silver/commodity/"
+            "debt/international-index/money-market ETFs. Sector/"
+            "industry classification is not available (same reason as "
+            "nse_full). ETF closures are rare relative to stock "
+            "delistings, so survivorship bias here is smaller than "
+            "for an equity universe, but not zero."
         ),
     ),
 }

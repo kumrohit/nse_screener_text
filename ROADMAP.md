@@ -5,7 +5,7 @@ commits that complete them; anything descoped gets struck through with a
 one-line reason, not silently deleted. Design rationale lives in
 TECHNICAL_DESIGN.md; this file is the *what and in which order*.
 
-Status snapshot: v0.13.0 — **v0.7 track complete** (Items 5 and 6);
+Status snapshot: v0.13.1 — **v0.7 track complete** (Items 5 and 6);
 **Item 9 (evidence-based strategy presets) complete**; **Item 10
 (portfolio allocation engine) complete**; **Item 11 (UI professional
 redesign) shipped in part** — the sidebar layout restructure is
@@ -13,10 +13,13 @@ explicitly deferred by decision, everything else done; **Item 14
 (screen backtester) complete** — Item 3 (bhavcopy cutover) now unparked
 per Item 14's spec note, still calendar-gated on its own evidence
 window; **Item 15 Phase A (universe registry) complete** 2026-07-10 —
-`nifty500` + `nse_full` (2,047 symbols, real backfill run) registered,
-`--universe` CLI threading, a webapp universe selector, the hard memory
-gate measured and passed (782 MB, no architecture change needed).
-`nse_etf` and preset `universes` tags remain a deliberate follow-up.
+three universes registered (`nifty500`, `nse_full` 2,047 symbols,
+`nse_etf` 36 curated broad equity-index ETFs), `--universe` CLI
+threading, a webapp universe selector, the hard memory gate measured
+and passed (782 MB, no architecture change needed), a sector-data-gap
+warning (loud, not a silent zero-match), and preset `universes` tags
+computed from spec content. Point-in-time index membership (Phase B)
+remains gated on data-source archaeology.
 Data layer live-verified (500/500), 21-condition DSL (incl. sector
 filters & cross-sectional relative strength, gap, atr_pct_percentile),
 patterns, 26 built-in presets (all evidence-annotated, see
@@ -50,20 +53,27 @@ minutes per condition against the real 500-symbol store. The universe
 registry (`screener/universes.py`) turns "which symbols/store/benchmark"
 into a config entry rather than hardcoded paths — `nifty500` (migrated
 from a flat `data/` layout into `data/nifty500/` via an idempotent
-one-time move) and `nse_full` (all 2,047 NSE EQ-series symbols,
-backfilled live over the existing yfinance pipeline — no new
-adjustment-correctness code), each with its own liquidity gate and
-survivorship note, selectable from a webapp header dropdown or
-`--universe` on the CLI. Memory gate measured and passed (782 MB peak
-RSS with both universes' panels resident, vs. a 4 GB target) — no
-on-demand/LRU rearchitecture needed. 236 tests green, no known failures
-— `tests/conftest.py` makes the suite hermetic (forces demo mode so it
-passes identically in CI and on a dev machine that has already run
-`backfill`). Next up: `nse_etf` onboarding or point-in-time index
-membership (Item 15 Phase B), the deferred sidebar layout restructure,
-the preset evidence loop-closure
-(Item 14's own follow-on), or Item 3's bhavcopy cutover once its
-evidence window closes.
+one-time move), `nse_full` (all 2,047 NSE EQ-series symbols, backfilled
+live over the existing yfinance pipeline — no new adjustment-correctness
+code), and `nse_etf` (36 curated broad domestic equity-index ETFs —
+NSE's own ETF listing turned out too inconsistently classified to
+auto-derive this list reliably, checked live before committing to an
+approach), each with its own liquidity gate and survivorship note,
+selectable from a webapp header dropdown or `--universe` on the CLI.
+Memory gate measured and passed (782 MB peak RSS with panels resident
+for both larger universes simultaneously, vs. a 4 GB target) — no
+on-demand/LRU rearchitecture needed. A universe with no sector/industry
+data (nse_full, nse_etf) now warns loudly on a sector-based screen
+instead of silently returning zero matches, and the preset dropdown
+filters itself to what's applicable on the active universe. 252 tests
+green, no known failures — `tests/conftest.py` makes the suite hermetic
+(forces demo mode so it passes identically in CI and on a dev machine
+that has already run `backfill`). Next up: point-in-time index
+membership (Item 15 Phase B, gated on data-source archaeology), the
+cohort tracker (Item 16, buildable now), the deferred sidebar layout
+restructure, the preset evidence loop-closure (Item 14's own
+follow-on), or Item 3's bhavcopy cutover once its evidence window
+closes.
 
 ---
 
@@ -71,19 +81,21 @@ evidence window closes.
 
 ## SEQUENCING — after v0.13.0 (updated 2026-07-10)
 
-**NOW (next Claude Code session) — two independent tracks, either order:**
-1. *Item 15-B: point-in-time membership* — gated on Rohit's data
+**DONE 2026-07-10** — *Phase-A follow-ups batch*: `nse_etf` onboarded
+(36 curated broad domestic equity-index ETFs — NSE's own ETF listing's
+`Underlying` column turned out too inconsistent to auto-classify, see
+§A below), preset `universes` tags computed from spec sector-usage
+(not hand-maintained) with dropdown filtering live-verified, and the
+sector-data-gap warning (`evaluator.sector_data_gap_warning`, wired
+into `/api/screen`, `/api/backtest`, and both CLI commands) — a
+sector-based screen on `nse_full` now warns loudly instead of silently
+returning zero matches. 16 new tests, 252 total.
+
+**NOW (next Claude Code session):**
+1. *Item 15-B: point-in-time membership* — still gated on Rohit's data
    archaeology (how far back do clean NSE reconstitution records go?);
    the backtester eligibility filter itself is a small session once the
    membership file exists.
-2. *Phase-A follow-ups batch* (one session): onboard `nse_etf`
-   (equity-index ETFs only), preset `universes` tags with dropdown
-   filtering, and — new task from the v0.13.0 review — **sector-data
-   gap warning**: `nse_full` carries no industry data, so sector /
-   sector_rank conditions currently return zero matches silently;
-   validation (or the screen response) must warn "universe has no
-   sector data" instead. Optionally source an industry mapping for
-   nse_full later; the warning ships first.
 
 **WAITING (clock, ~2026-07-19) — Item 2 cutover chain:** if the
 cross-source check stays clean → config flip, yfinance to fallback,
@@ -779,24 +791,30 @@ deferred. US equities / MCX / F&O deferrals stand as recorded.
 
 All universes share NSE calendar, INR, and the full field set — so the
 registry holds only: {id, name, benchmark, liquidity_gate,
-survivorship_note}. No asset-class branching anywhere. Landed in two
-slices: a foundation refactor (2026-07-09, zero behaviour change,
-`nifty500` only) followed by onboarding the second universe,
-`nse_full`, once the foundation was proven (2026-07-10).
+survivorship_note}. No asset-class branching anywhere. Landed in three
+slices, all 2026-07-10 except the first: a foundation refactor
+(2026-07-09, zero behaviour change, `nifty500` only), onboarding a real
+second universe (`nse_full`) once the foundation was proven, and a
+same-day follow-ups batch (`nse_etf`, the sector-data-gap warning,
+preset `universes` tags) once the sequencing note flagged it as
+unblocked and actionable.
 
-- [x] `screener/universes.py` — registry with **two** universes:
-      `nifty500` (existing) and `nse_full` (all NSE EQ-series symbols,
-      2,047 per NSE's own equity listing — vs. nifty500's ~500).
-      `liquidity_gate_cr` is the first field that earns its place on
-      `Universe`: nse_full's much longer tail of thin names needs a
-      stricter ₹2cr floor vs. nifty500's ₹0.5cr. `sector_enabled` is
+- [x] `screener/universes.py` — registry with **three** universes:
+      `nifty500` (existing), `nse_full` (all NSE EQ-series symbols,
+      2,047 per NSE's own equity listing — vs. nifty500's ~500), and
+      `nse_etf` (36 curated broad domestic equity-index ETFs — see the
+      dedicated bullet below). `liquidity_gate_cr` is the first field
+      that earned its place on `Universe`: nse_full's much longer tail
+      of thin names needs a stricter ₹2cr floor vs. nifty500's ₹0.5cr,
+      and nse_etf needs a looser ₹0.1cr floor (ETF unit turnover runs
+      lower even for large, legitimate funds). `sector_enabled` is
       still not a field — NSE's raw listing carries no sector/industry
       classification (an index-methodology concept, not a raw-listing
       one), so `sector`/`sector_rank` conditions simply find nothing to
-      match for nse_full; the existing NaN-industry handling already
-      degrades gracefully, no registry flag needed. `nse_etf` and the
-      full original schema (`symbol_source` as a stored callable, etc.)
-      remain a further follow-up.
+      match for nse_full/nse_etf; the existing NaN-industry handling
+      already degrades gracefully (now paired with the sector-data-gap
+      warning below so this isn't a silent zero-match), no registry
+      flag needed.
 - [x] Per-universe storage `data/{universe_id}/…` (prices.parquet,
       universe.csv, benchmark.parquet). `config.py` gained
       `price_store()`/`universe_file()`/`benchmark_store()` functions
@@ -852,18 +870,48 @@ slices: a foundation refactor (2026-07-09, zero behaviour change,
       any caller that doesn't), with a regression test asserting the
       webapp backtest endpoint's caveat text matches the active universe.
 - [x] **Zero nifty500 behaviour change, verified**: full suite green
-      (236 tests — 225 after the foundation slice, 11 more for nse_full/
-      the selector/the survivorship fix), and live-checked against the
-      real 500-symbol store — `screen`/`backtest` CLI commands and the
-      webapp both produce identical results after migration as before
-      it (same match counts, same `as_of`, `panel_count: 500`).
-- [ ] **Sector-data gap warning (from v0.13.0 review)**: sector/sector_rank
-      conditions on a universe without industry data must warn loudly in
-      validation or the response, never return zero matches silently.
-- [ ] **Not built this pass**: `nse_etf`, preset `universes` tags (no
-      second universe existed to differentiate presets against when
-      that bullet was originally scoped out; revisit once `nse_etf`
-      makes some presets genuinely inapplicable).
+      (252 tests — 225 after the foundation slice, 11 for nse_full/the
+      selector/the survivorship fix, 16 more for the follow-ups batch),
+      and live-checked against the real 500-symbol store —
+      `screen`/`backtest` CLI commands and the webapp both produce
+      identical results after migration as before it (same match
+      counts, same `as_of`, `panel_count: 500`).
+- [x] **Sector-data gap warning (from v0.13.0 review) — done 2026-07-10**:
+      `evaluator.sector_data_gap_warning(screen, universe)` — `None` if
+      the spec doesn't use `sector`/`sector_rank`, or the universe has
+      any non-null `industry` value; otherwise a warning string. Wired
+      into `/api/screen` and `/api/backtest` responses (a `warnings`
+      list, rendered as a banner in the UI) and both CLI commands
+      (printed before the run). Live-verified: a `sector_rank` screen
+      against the real `nse_full` store now prints the warning and an
+      honest "0 matches," instead of a silent, confusing zero.
+- [x] **`nse_etf` onboarded — done 2026-07-10**: a *curated* list of 36
+      broad domestic equity-index ETFs (NIFTYBEES, BANKBEES, NIF100BEES,
+      etc.), not an automatic fetch-and-classify — NSE's own ETF listing
+      (`eq_etfseclist.csv`) has an `Underlying` column too inconsistent
+      to classify reliably by keyword (fund names leak into what should
+      be index names for a large share of its ~330 rows; checked live
+      before deciding this, the same "verify the real data before
+      estimating scope" lesson as `nse_full`'s bhavcopy pivot). Each
+      curated symbol was cross-checked against a live fetch and tracks a
+      well-known broad index; gold/silver/commodity/debt/international-
+      index/money-market ETFs excluded per "equity-index ETFs only."
+      Real backfill run: 36 symbols, 35,905 rows — under a minute live.
+      `liquidity_gate_cr=0.1` (ETF unit turnover runs lower than
+      growth-stock turnover even for large, legitimate funds).
+- [x] **Preset `universes` tags — done 2026-07-10**: computed from each
+      preset's spec (does it use `sector`/`sector_rank`?) at import time
+      in `presets.py`, not hand-maintained per preset — a new preset is
+      tagged correctly automatically. Today: 2 of 26 presets
+      (`sector_leader_pullback`, `lagging_sector_bounce`) are tagged
+      `["nifty500"]` only; the rest are tagged for every registered
+      universe. `GET /api/presets` exposes the field; the UI preset
+      dropdown filters to it and rebuilds on every universe switch —
+      live-verified via Playwright (the two sector presets disappear on
+      `nse_full`/`nse_etf`, reappear on switching back).
+- [ ] **Not built this pass**: the fuller original registry schema
+      (`symbol_source` as a stored callable rather than `universe.py`'s
+      internal `_FETCHERS` dispatch dict).
 
 ### B. Survivorship mitigation — point-in-time index membership
 

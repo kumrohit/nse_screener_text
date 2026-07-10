@@ -1,5 +1,6 @@
 let PRESETS = [];   // loaded from /api/presets
 let tab="en", spec=null;
+let ACTIVE_UNIVERSE_ID = "nifty500";  // filters which presets show (ROADMAP Item 15)
 
 function pickPreset(){
   const id = $("presetSel").value;
@@ -156,8 +157,13 @@ function rebuildPresetDropdown(){
   }))];
   const sel=$("presetSel");
   sel.innerHTML=`<option value="">— choose a pre-configured screen —</option>`;
+  // presets with a universes tag (built-ins) are hidden when they don't
+  // apply to the active universe (e.g. sector presets on nse_full,
+  // which has no sector data — see evaluator.sector_data_gap_warning);
+  // user-saved presets carry no tag and always show.
+  const visible=PRESETS.filter(p=>!p.universes || p.universes.includes(ACTIVE_UNIVERSE_ID));
   const groups={};
-  PRESETS.forEach(p=>{(groups[p.group]=groups[p.group]||[]).push(p)});
+  visible.forEach(p=>{(groups[p.group]=groups[p.group]||[]).push(p)});
   for(const [g,items] of Object.entries(groups)){
     const og=document.createElement("optgroup");og.label=g;
     items.forEach(p=>{const o=document.createElement("option");
@@ -586,6 +592,9 @@ function renderBacktestResult(j){
   let html = `<div class="pdesc" style="display:block">${j.n_symbols} symbols, `+
     `<b>${j.n_events_total}</b> events total (${j.elapsed_sec}s)`+
     (j.hypothesis?`<br>Hypothesis: <i>${j.hypothesis}</i>`:"")+`</div>`;
+  if(j.warnings && j.warnings.length){
+    html += `<div class="evcaveat">${j.warnings.join(" ")}</div>`;
+  }
   html += Object.entries(j.horizons).map(([h,stats])=>
     btHorizonTable(h,stats) + (stats.insufficient?"":btHistogram(h,j.events))).join("");
   html += btTimeline(j.event_timeline);
@@ -612,6 +621,7 @@ async function refreshStatus(){
     const s=await api("/api/status");
     $("status").innerHTML=`data as of <b>${s.as_of}</b> · <b>${s.universe_size}</b> symbols · ${s.history_years}y daily`+
       (s.mode==="demo"?`<span class="badge">DEMO DATA</span>`:``);
+    ACTIVE_UNIVERSE_ID = s.universe_id || "nifty500";
     return s;
   }catch(e){$("status").textContent="backend unreachable"; return null}
 }
@@ -637,6 +647,7 @@ async function switchUniverse(){
   try{
     await api("/api/universe",{id});
     await refreshStatus();
+    rebuildPresetDropdown();  // some presets may not apply to the new universe
     toast(`Switched to ${name}`);
     // a screen/allocation/backtest from the previous universe no
     // longer applies — same reset a fresh screen run does.
@@ -656,8 +667,8 @@ async function init(){
   try{
     BUILTIN_PRESETS = await api("/api/presets");
   }catch(e){ BUILTIN_PRESETS=[] }
+  await refreshStatus();  // sets ACTIVE_UNIVERSE_ID before presets filter on it
   await loadUserPresets();
-  await refreshStatus();
   await loadUniverses();
 }
 
@@ -988,6 +999,13 @@ function render(r){
   $("english").textContent=r.english;
   $("specPre").textContent=JSON.stringify(r.spec,null,2);
   $("interp").style.display="block";
+  const warnBox=$("screenWarnings");
+  if(r.warnings && r.warnings.length){
+    warnBox.textContent=r.warnings.join(" ");
+    warnBox.style.display="block";
+  }else{
+    warnBox.style.display="none";
+  }
   LAST_MATCHES=r.matches;
   LAST_SPEC=r.spec;
   SORT_KEY="ret_3m_desc"; SECTOR_FILTER=null;

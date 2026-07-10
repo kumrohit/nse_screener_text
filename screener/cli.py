@@ -166,6 +166,9 @@ def cmd_screen(args) -> None:
 
     universe_id = getattr(args, "universe", universes.DEFAULT_UNIVERSE)
     uni = universe.fetch_universe(universe_id=universe_id)
+    warning = evaluator.sector_data_gap_warning(spec, uni)
+    if warning:
+        print(f"WARNING: {warning}")
     prices = _load_prices(universe_id)
     latest = data_ingest.assert_fresh(prices)
     panels = indicators.build_panels(prices)
@@ -205,6 +208,9 @@ def cmd_backtest(args) -> None:
     print(dsl.describe(spec))
     universe_id = getattr(args, "universe", universes.DEFAULT_UNIVERSE)
     uni = universe.fetch_universe(universe_id=universe_id)
+    warning = evaluator.sector_data_gap_warning(spec, uni)
+    if warning:
+        print(f"WARNING: {warning}")
     prices = _load_prices(universe_id)
     data_ingest.assert_fresh(prices)
     panels = indicators.build_panels(prices)
