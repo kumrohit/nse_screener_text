@@ -98,6 +98,10 @@ numbers on both universes.
 
 **ANYTIME:** v0.11 sidebar (last UI box, cosmetic priority).
 
+**NEW (Item 16):** cohort tracker — buildable now, independent of the
+cutover clock; becomes more valuable the sooner cohorts start aging, so
+early is better than perfect.
+
 ---
 
 ## 0. One-time setup & validation
@@ -902,6 +906,88 @@ history file (symbol, entry_date, exit_date) for Nifty 500.
       less-efficient universe (the momentum literature says it should)
       or was it a large-cap artifact? That comparison is the payoff of
       this whole item.
+
+## 16. Cohort tracker (v0.14) — out-of-sample filter validation
+
+Walk-forward complement to the Item-14 backtester: freeze a cohort of
+matches at signal time, track forward at the SAME horizons/baseline/
+conventions, aggregate per spec into an IS-vs-OOS scorecard. Forward
+cohorts are survivorship-free by construction — the one bias the
+backtester cannot fully remove. This is a *filter validator*, not a
+trade tracker: no fills, no partial exits, no P&L accounting.
+
+### Data model & conventions (decided; implement as specced)
+
+- [ ] **Cohort record** (data/{universe}/cohorts.jsonl): {cohort_id,
+      created_ts, universe, spec (full) + spec_hash, symbols[], weights
+      (equal | allocation payload w/ method+params), entry_date (first
+      trading day AFTER creation), status: pending|active|completed,
+      notes}. **Dates frozen, never prices** — the store is
+      split/bonus-adjusted and adjustment rewrites history; entry price
+      is always recomputed as open[entry_date] from the current series.
+      A test simulates a retroactive adjustment (halve the series) and
+      asserts returns are invariant.
+- [ ] **Entry convention** — open of entry_date, identical to the
+      backtester. Day-0 = pending: no returns displayed, ever, until
+      the entry bar exists.
+- [ ] **Milestone snapshots** — at 5/20/60 bars post-entry, per-symbol
+      and cohort-aggregate metrics freeze permanently into the record
+      (close[entry+h]/open[entry]−1, gross and net at the universe's
+      cost default); a live "current" row keeps drifting for active
+      view only. At 60 bars → completed (archived, still in scorecard).
+- [ ] **Baseline parity** — same-date equal-weight universe forward
+      return (liquidity-passing set as of entry_date), computed by the
+      SAME code path as the backtester baseline (refactor to a shared
+      helper; no reimplementation). Nifty secondary. Excess is the
+      headline number everywhere.
+- [ ] **Symbol lifecycle** — stale/suspended symbol (last bar < store
+      latest): flag on the row, carry last available close, cohort
+      aggregate notes "N of M symbols stale". Never silently dropped —
+      dropping losers is exactly the bias this tool exists to avoid.
+
+### Scorecard (the payoff)
+
+- [ ] **Per-spec aggregation** — group cohorts by spec_hash: cohorts n,
+      total names, per-horizon mean/median excess (net), hit rate,
+      side-by-side with the backtester's IS numbers for the same
+      spec_hash (looked up from logged backtest runs). Footnote fixed:
+      "IS is survivorship-flattered; OOS is small-sample."
+- [ ] **Small-N honesty** — < 20 names at a horizon → "insufficient
+      sample", no mean printed. No significance claims at any N; this
+      is evidence accumulation, not hypothesis testing.
+- [ ] **Preset evidence loop** — completed-cohort OOS summaries feed
+      the same evidence objects the deferred backtest loop-closure
+      targets; one mechanism, two sources, clearly labelled IS vs OOS.
+
+### Surfaces
+
+- [ ] **UI** — results view: "Track these matches" (checkbox subset or
+      all); allocation view: "Track this portfolio" (weights included).
+      Cohorts tab: active list (age, current excess, next milestone),
+      cohort detail (per-symbol table + entry-marker sparklines),
+      spec scorecard view. Survivorship-free note ON the scorecard,
+      disclaimer per allocation conventions.
+- [ ] **API** — POST /api/cohorts (create), GET /api/cohorts[?spec_hash],
+      GET /api/cohorts/{id}, GET /api/scorecard/{spec_hash}. Cohort
+      creation logged to the screen log (same replay discipline).
+- [ ] **CLI** — `cohort create --from-last-screen [--symbols ...]`,
+      `cohort list`, `cohort show <id>`, `scorecard <spec_hash|preset>`.
+      Nightly refresh piggybacks `update` (milestones are computed
+      lazily from dates, so "refresh" is just viewing — no cron state).
+
+### Tests (≥14)
+
+- [ ] Adjustment invariance (the retroactive-halving test above).
+- [ ] Pending: day-0 cohort shows no returns; entry appears next bar.
+- [ ] Milestone freeze: metrics at h=5 identical when recomputed later.
+- [ ] Baseline parity: cohort baseline == backtester baseline on the
+      same engineered universe/date (shared-helper equality test).
+- [ ] Stale symbol flagged and retained in aggregates.
+- [ ] Scorecard: two engineered cohorts of one spec aggregate
+      correctly; IS lookup joins on spec_hash; <20-name suppression.
+- [ ] Completion at 60 bars; archived cohorts still in scorecard.
+- [ ] Weights: allocation-weighted cohort return differs correctly
+      from equal-weight on engineered dispersion.
 
 ## 12. Recurring operations (not one-time)
 
