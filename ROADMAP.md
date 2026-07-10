@@ -67,6 +67,39 @@ evidence window closes.
 
 ---
 
+---
+
+## SEQUENCING — after v0.13.0 (updated 2026-07-10)
+
+**NOW (next Claude Code session) — two independent tracks, either order:**
+1. *Item 15-B: point-in-time membership* — gated on Rohit's data
+   archaeology (how far back do clean NSE reconstitution records go?);
+   the backtester eligibility filter itself is a small session once the
+   membership file exists.
+2. *Phase-A follow-ups batch* (one session): onboard `nse_etf`
+   (equity-index ETFs only), preset `universes` tags with dropdown
+   filtering, and — new task from the v0.13.0 review — **sector-data
+   gap warning**: `nse_full` carries no industry data, so sector /
+   sector_rank conditions currently return zero matches silently;
+   validation (or the screen response) must warn "universe has no
+   sector data" instead. Optionally source an industry mapping for
+   nse_full later; the warning ships first.
+
+**WAITING (clock, ~2026-07-19) — Item 2 cutover chain:** if the
+cross-source check stays clean → config flip, yfinance to fallback,
+`delivery` condition + accumulation preset, risk log, and the nightly
+cron (mandatory from cutover day — bhavcopy history only accumulates
+forward).
+
+**THEN (the payoff run):** market-breadth regime fields, then the
+nifty500-vs-nse_full strategy-preset backtest comparison with
+pre-registered hypotheses — closes the preset evidence loop with real
+numbers on both universes.
+
+**ANYTIME:** v0.11 sidebar (last UI box, cosmetic priority).
+
+---
+
 ## 0. One-time setup & validation
 
 - [x] **Push to GitHub** — single permanent working folder, retire the
@@ -820,6 +853,9 @@ slices: a foundation refactor (2026-07-09, zero behaviour change,
       real 500-symbol store — `screen`/`backtest` CLI commands and the
       webapp both produce identical results after migration as before
       it (same match counts, same `as_of`, `panel_count: 500`).
+- [ ] **Sector-data gap warning (from v0.13.0 review)**: sector/sector_rank
+      conditions on a universe without industry data must warn loudly in
+      validation or the response, never return zero matches silently.
 - [ ] **Not built this pass**: `nse_etf`, preset `universes` tags (no
       second universe existed to differentiate presets against when
       that bullet was originally scoped out; revisit once `nse_etf`
