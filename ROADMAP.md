@@ -5,14 +5,19 @@ commits that complete them; anything descoped gets struck through with a
 one-line reason, not silently deleted. Design rationale lives in
 TECHNICAL_DESIGN.md; this file is the *what and in which order*.
 
-Status snapshot: v0.12.0 — **v0.7 track complete** (Items 5 and 6);
+Status snapshot: v0.12.1 — **v0.7 track complete** (Items 5 and 6);
 **Item 9 (evidence-based strategy presets) complete**; **Item 10
 (portfolio allocation engine) complete**; **Item 11 (UI professional
 redesign) shipped in part** — the sidebar layout restructure is
 explicitly deferred by decision, everything else done; **Item 14
 (screen backtester) complete** — Item 3 (bhavcopy cutover) now unparked
 per Item 14's spec note, still calendar-gated on its own evidence
-window.
+window; **Item 15 Phase A (universe registry-lite) foundation landed**
+2026-07-09 — by explicit scoping decision, only the refactor itself
+(registry, per-universe storage, `--universe` CLI threading, a
+universe-keyed webapp state cache), proven with zero behaviour change;
+`nse_full`/`nse_etf` themselves, the memory gate, and the UI selector
+are a deliberate follow-up, not built this pass.
 Data layer live-verified (500/500), 21-condition DSL (incl. sector
 filters & cross-sectional relative strength, gap, atr_pct_percentile),
 patterns, 26 built-in presets (all evidence-annotated, see
@@ -42,13 +47,19 @@ a survivorship caveat on every surface. Vectorized for the cheap
 condition types; the expensive ones (S/R, Bollinger squeeze,
 cross-sectional percentiles) use a `stride=20` date grid — raised from
 the originally-planned 5 after live measurement showed 5 took 6-15
-minutes per condition against the real 500-symbol store. 212 tests
-green, no known failures — `tests/conftest.py` makes the suite hermetic
-(forces demo mode so it passes identically in CI and on a dev machine
-that has already run `backfill`). Next up: the deferred sidebar layout
-restructure, the preset evidence loop-closure (Item 14's own follow-on),
-whenever prioritized, or Item 3's bhavcopy cutover once its evidence
-window closes.
+minutes per condition against the real 500-symbol store. The universe
+registry (`screener/universes.py`) turns "which symbols/store/benchmark"
+into a config entry rather than hardcoded paths — today it holds exactly
+one entry, `nifty500`, migrated from a flat `data/` layout into
+`data/nifty500/` via an idempotent one-time move, verified against the
+real dev-machine store. 225 tests green, no known failures —
+`tests/conftest.py` makes the suite hermetic (forces demo mode so it
+passes identically in CI and on a dev machine that has already run
+`backfill`). Next up: `nse_full`/`nse_etf` onboarding (Item 15 Phase A
+continued) or point-in-time index membership (Item 15 Phase B), the
+deferred sidebar layout restructure, the preset evidence loop-closure
+(Item 14's own follow-on), or Item 3's bhavcopy cutover once its
+evidence window closes.
 
 ---
 
@@ -723,31 +734,56 @@ removes the field-mask, calendar, and bars_per_year workstreams entirely;
 the freed budget goes to equity depth. Cross-universe screens remain
 deferred. US equities / MCX / F&O deferrals stand as recorded.
 
-### A. Equity universe registry (registry-lite)
+### A. Equity universe registry (registry-lite) — foundation slice done 2026-07-09
 
 All universes share NSE calendar, INR, and the full field set — so the
 registry holds only: {id, name, symbol_source, liquidity_gate,
 benchmark, survivorship_note}. No asset-class branching anywhere.
 
-- [ ] `screener/universes.py` with three universes: `nifty500`
-      (current), `nse_full` (all EQ series from bhavcopy, ~1,900 names,
-      liquidity gate ₹2cr median turnover, strengthened survivorship
-      note — churn outside the 500 is far worse), `nse_etf` (NSE-listed
-      ETFs; sector/RS conditions disabled via the existing
-      cross_section/sector plumbing, not a field mask; benchmark ^NSEI
-      for equity ETFs, rel_strength validation rejects commodity ETFs
-      pending a per-symbol benchmark map — keep v1 simple: equity-index
-      ETFs only, gold/silver ETFs excluded from the list).
-- [ ] Per-universe storage data/{universe_id}/…; nifty500 migrates with
-      a one-time move; screen-log entries gain `universe` (old entries
-      default on read).
-- [ ] `--universe` on all CLI commands; webapp header selector; preset
-      `universes` tags (RS/sector presets tagged off for nse_etf).
-- [ ] **Memory gate (hard)** — nse_full ≈ 4× panels. Either peak RSS
-      < 4 GB on the Air with panels resident, or on-demand panel build
-      with LRU (< 30 s cold screen, < 5 s warm). Measure first.
-- [ ] Zero nifty500 behaviour change: suite green, spec hashes
-      unchanged, old logs readable.
+**Scoped by explicit decision before starting**: land the registry
+refactor and prove zero behaviour change first, defer `nse_full`/
+`nse_etf` themselves (and everything that only matters once a second
+universe exists) to a follow-up — matches this section's own note below
+that the refactor "must land alone."
+
+- [x] `screener/universes.py` — registry with **one** universe,
+      `nifty500`. Deliberately minimal schema for now: `{id, name,
+      benchmark_ticker, survivorship_note}` — no `liquidity_gate`/
+      `sector_enabled`/`symbol_source` fields yet, since with a single
+      universe there's nothing for them to differ against
+      (`config.MIN_MEDIAN_TURNOVER_CR` and the sector/RS condition
+      types stay global exactly as before). `nse_full`/`nse_etf` and
+      the fuller schema they need are **not built this pass** — a
+      distinct follow-up, not a natural extension of the plumbing.
+- [x] Per-universe storage `data/{universe_id}/…` (prices.parquet,
+      universe.csv, benchmark.parquet). `config.py` gained
+      `price_store()`/`universe_file()`/`benchmark_store()` functions
+      (default-universe case still resolves through the existing
+      `PRICE_STORE`/`UNIVERSE_FILE`/`BENCHMARK_STORE` attributes so
+      `monkeypatch.setattr(config, "PRICE_STORE", …)`-style test
+      fixtures kept working unchanged). An idempotent
+      `_migrate_legacy_nifty500_layout()` runs at import time and moved
+      the real dev-machine store from flat `data/` into `data/nifty500/`
+      on first run — verified against the actual 500-symbol store, not
+      just synthetic data. Screen-log entries gain a `universe` field;
+      old entries without it default to `nifty500` on read
+      (`GET /api/log`), not backfilled in place.
+- [x] `--universe` on `backfill`/`update`/`verify`/`screen`/`backtest`
+      (argparse `choices` gives free validation + a helpful error).
+      **Not done**: a webapp header selector and preset `universes`
+      tags — both are dead UI with only one universe registered;
+      building them now would be unused generality. The webapp's state
+      cache is already keyed by `universe_id` internally (`_load_state
+      (universe_id=...)`) so adding the selector later is a UI-only
+      change, not a plumbing change.
+- [ ] **Memory gate (hard)** — not applicable yet; only relevant once
+      `nse_full` (~4× panel memory) exists. Deferred with it.
+- [x] **Zero nifty500 behaviour change, verified**: full suite green
+      (225 tests, 13 new for the registry/migration/log-field/CLI-flag
+      behaviour), and live-checked against the real 500-symbol store —
+      `screen`/`backtest` CLI commands and the webapp both produce
+      identical results after migration as before it (same match
+      counts, same `as_of`, `panel_count: 500`).
 
 ### B. Survivorship mitigation — point-in-time index membership
 

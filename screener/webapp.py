@@ -40,11 +40,17 @@ from fastapi import FastAPI
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 
-from . import allocate, backtest, config, dsl, evaluator, explain, indicators
+from . import (allocate, backtest, config, dsl, evaluator, explain,
+              indicators, universes)
 
 app = FastAPI(title="NSE Text Screener")
 
-_state: dict = {}
+# Keyed by universe_id (ROADMAP Item 15 Phase A) — today only ever
+# populated for `universes.DEFAULT_UNIVERSE` since no endpoint or UI
+# exposes another one yet, but every reader already goes through
+# `_load_state(universe_id)` so a second universe is a pure addition
+# once one exists, not a plumbing change.
+_state: dict[str, dict] = {}
 _lock = threading.Lock()
 
 
@@ -56,34 +62,38 @@ def _demo_forced() -> bool:
     return _os.environ.get("SCREENER_FORCE_DEMO", "") not in ("", "0")
 
 
-def _store_mtime() -> float | None:
+def _store_mtime(universe_id: str) -> float | None:
     """mtime of the file a long-running server must watch for changes.
     None in demo mode (nothing on disk to watch) — kept distinct from
     any real mtime so a demo->live transition is also detected."""
-    return (config.PRICE_STORE.stat().st_mtime
-           if config.PRICE_STORE.exists() and not _demo_forced() else None)
+    store = config.price_store(universe_id)
+    return (store.stat().st_mtime
+           if store.exists() and not _demo_forced() else None)
 
 
-def _load_state() -> dict:
+def _load_state(universe_id: str = universes.DEFAULT_UNIVERSE) -> dict:
     """Cached, but self-invalidating: a long-running server used to load
     panels once at startup and never notice `python -m screener.cli
     update` writing a fresh prices.parquet overnight, silently screening
     yesterday's data forever. Now every call compares the store's mtime
-    against what was loaded and rebuilds on any change."""
+    against what was loaded and rebuilds on any change. One cache entry
+    per universe_id (see `_state`'s docstring above)."""
     with _lock:
-        mtime = _store_mtime()
-        if _state and _state.get("_mtime") == mtime:
-            return _state
-        _state.clear()
-        if config.PRICE_STORE.exists() and not _demo_forced():
+        mtime = _store_mtime(universe_id)
+        cached = _state.get(universe_id)
+        if cached and cached.get("_mtime") == mtime:
+            return cached
+        entry: dict = {}
+        store = config.price_store(universe_id)
+        if store.exists() and not _demo_forced():
             from . import cross_section, data_ingest, universe as uni_mod
-            prices = pd.read_parquet(config.PRICE_STORE)
+            prices = pd.read_parquet(store)
             latest = data_ingest.assert_fresh(prices)
-            _state.update(
+            entry.update(
                 mode="live",
                 panels=indicators.build_panels(prices),
-                universe=uni_mod.fetch_universe(),
-                benchmark=data_ingest.load_benchmark(),
+                universe=uni_mod.fetch_universe(universe_id=universe_id),
+                benchmark=data_ingest.load_benchmark(universe_id),
                 as_of=str(latest.date()),
                 _mtime=mtime,
             )
@@ -93,11 +103,13 @@ def _load_state() -> dict:
         else:
             from . import demo
             panels, uni, bench = demo.build_demo()
-            _state.update(mode="demo", panels=panels, universe=uni,
-                          benchmark=bench,
-                          as_of=str(panels["STEADY"].index[-1].date()),
-                          _mtime=None)
-        return _state
+            entry.update(mode="demo", panels=panels, universe=uni,
+                         benchmark=bench,
+                         as_of=str(panels["STEADY"].index[-1].date()),
+                         _mtime=None)
+        entry["universe_id"] = universe_id
+        _state[universe_id] = entry
+        return entry
 
 
 class ParseIn(BaseModel):
@@ -285,7 +297,7 @@ def _run_screen(spec: dict) -> dict:
 
     _log_run(spec, st["as_of"] if as_of == "latest" else as_of,
              {"matched": len(matches), "evaluated": evaluated}, matches,
-             spec_h)
+             spec_h, st["universe_id"])
     return {
         "english": dsl.describe(spec),
         "spec": spec,
@@ -734,8 +746,12 @@ def _find_prior_run(spec_h: str) -> dict | None:
 
 
 def _log_run(spec: dict, as_of: str, stats: dict, matches: list,
-             spec_h: str) -> None:
-    """Append-only replay trail: spec + data date fully determine results."""
+             spec_h: str,
+             universe_id: str = universes.DEFAULT_UNIVERSE) -> None:
+    """Append-only replay trail: spec + data date fully determine results.
+    `universe_id` (ROADMAP Item 15 Phase A) — every entry from here on
+    records which universe it ran against; entries written before this
+    field existed are defaulted to nifty500 on read, not backfilled."""
     import json as _json
     import datetime as _dt
     try:
@@ -745,7 +761,7 @@ def _log_run(spec: dict, as_of: str, stats: dict, matches: list,
                 "ts": _dt.datetime.now().isoformat(timespec="seconds"),
                 "as_of": as_of, "spec": spec, "english": dsl.describe(spec),
                 "stats": stats, "config_hash": config.config_hash(),
-                "spec_hash": spec_h,
+                "spec_hash": spec_h, "universe": universe_id,
                 "matched": [m["symbol"] for m in matches],
             }) + "\n")
         _rotate_log_if_needed()
@@ -759,7 +775,10 @@ def screen_log(limit: int = 20):
     if not LOG_FILE.exists():
         return []
     lines = LOG_FILE.read_text().strip().splitlines()[-limit:]
-    return [_json.loads(l) for l in reversed(lines)]
+    entries = [_json.loads(l) for l in reversed(lines)]
+    for e in entries:
+        e.setdefault("universe", universes.DEFAULT_UNIVERSE)
+    return entries
 
 
 # ---------------------------------------------------------------- watchlist

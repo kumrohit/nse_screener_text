@@ -239,12 +239,12 @@ Unknown keys are flagged and ignored rather than silently doing nothing. The eff
 ## Tests
 
 ```bash
-python -m pytest tests/                    # 212 tests: synthetic series with known answers,
+python -m pytest tests/                    # 225 tests: synthetic series with known answers,
                                            # evidence-layer agreement, web API contract,
                                            # allocation-engine invariants, backtester
                                            # methodology (event dedup, entry convention,
                                            # baseline, costs, bootstrap, vectorizer
-                                           # consistency)
+                                           # consistency), universe registry
 cd web/visual && npm test                  # visual regression: 6 baseline screenshots
                                            # against a live demo-mode server (see below)
 python -m tests.golden_harness             # live parser scoring vs 23 hand-verified queries

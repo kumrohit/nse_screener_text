@@ -5,6 +5,9 @@ data/*.csv
 data/*.jsonl
 data/user_presets.json
 data/config_local.toml
+# per-universe stores (ROADMAP Item 15 Phase A: data/{universe_id}/…)
+data/*/*.parquet
+data/*/*.csv
 
 # python
 __pycache__/

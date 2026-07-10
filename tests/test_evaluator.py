@@ -460,8 +460,9 @@ class TestStaleServerFix:
         monkeypatch.setattr(config, "PRICE_STORE", store)
         monkeypatch.setattr(data_ingest, "assert_fresh",
                             lambda prices: prices["date"].max())
-        monkeypatch.setattr(universe, "fetch_universe", lambda: uni)
-        monkeypatch.setattr(data_ingest, "load_benchmark", lambda: None)
+        monkeypatch.setattr(universe, "fetch_universe", lambda *a, **k: uni)
+        monkeypatch.setattr(data_ingest, "load_benchmark",
+                            lambda *a, **k: None)
 
         webapp._state.clear()
         try:
@@ -491,8 +492,9 @@ class TestStaleServerFix:
         monkeypatch.setattr(config, "PRICE_STORE", store)
         monkeypatch.setattr(data_ingest, "assert_fresh",
                             lambda prices: prices["date"].max())
-        monkeypatch.setattr(universe, "fetch_universe", lambda: uni)
-        monkeypatch.setattr(data_ingest, "load_benchmark", lambda: None)
+        monkeypatch.setattr(universe, "fetch_universe", lambda *a, **k: uni)
+        monkeypatch.setattr(data_ingest, "load_benchmark",
+                            lambda *a, **k: None)
         monkeypatch.setenv("SCREENER_FORCE_DEMO", "1")
 
         webapp._state.clear()

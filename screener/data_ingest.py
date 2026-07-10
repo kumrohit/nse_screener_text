@@ -19,6 +19,7 @@ import time
 import pandas as pd
 
 from . import config
+from .universes import DEFAULT_UNIVERSE
 
 CHUNK = 50
 MAX_RETRIES = 3
@@ -60,7 +61,8 @@ def _download_chunk(tickers: list[str], start: str) -> pd.DataFrame:
     return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
 
 
-def full_backfill(universe: pd.DataFrame) -> pd.DataFrame:
+def full_backfill(universe: pd.DataFrame,
+                  universe_id: str = DEFAULT_UNIVERSE) -> pd.DataFrame:
     start = (dt.date.today()
              - dt.timedelta(days=int(365.25 * config.HISTORY_YEARS)))
     tickers = universe["yf_ticker"].tolist()
@@ -72,16 +74,19 @@ def full_backfill(universe: pd.DataFrame) -> pd.DataFrame:
         time.sleep(2)  # be polite; avoids yfinance throttling
     prices = pd.concat(parts, ignore_index=True)
     prices = _clean(prices)
-    config.DATA_DIR.mkdir(parents=True, exist_ok=True)
-    prices.to_parquet(config.PRICE_STORE, index=False)
+    store = config.price_store(universe_id)
+    store.parent.mkdir(parents=True, exist_ok=True)
+    prices.to_parquet(store, index=False)
     return prices
 
 
-def incremental_update(universe: pd.DataFrame) -> pd.DataFrame:
+def incremental_update(universe: pd.DataFrame,
+                       universe_id: str = DEFAULT_UNIVERSE) -> pd.DataFrame:
     """Re-fetch last 10 calendar days and merge (handles late corrections)."""
-    if not config.PRICE_STORE.exists():
-        return full_backfill(universe)
-    prices = pd.read_parquet(config.PRICE_STORE)
+    store = config.price_store(universe_id)
+    if not store.exists():
+        return full_backfill(universe, universe_id)
+    prices = pd.read_parquet(store)
     start = (pd.Timestamp.today() - pd.Timedelta(days=10)).date().isoformat()
     tickers = universe["yf_ticker"].tolist()
     parts = [_download_chunk(tickers[i:i + CHUNK], start)
@@ -94,7 +99,7 @@ def incremental_update(universe: pd.DataFrame) -> pd.DataFrame:
             .sort_values(["symbol", "date"])
             .reset_index(drop=True)
         )
-        prices.to_parquet(config.PRICE_STORE, index=False)
+        prices.to_parquet(store, index=False)
     return prices
 
 
@@ -122,11 +127,13 @@ def assert_fresh(prices: pd.DataFrame) -> pd.Timestamp:
 
 
 # ---------------------------------------------------------------- benchmark
-BENCHMARK_TICKER = "^NSEI"
-BENCHMARK_STORE = config.DATA_DIR / "benchmark.parquet"
+BENCHMARK_TICKER = "^NSEI"  # nifty500's own benchmark; a second universe
+                            # with a different index plugs in via
+                            # universes.Universe.benchmark_ticker once
+                            # this function is threaded per-universe too
 
 
-def fetch_benchmark() -> pd.Series:
+def fetch_benchmark(universe_id: str = DEFAULT_UNIVERSE) -> pd.Series:
     """Nifty 50 close series for relative-strength conditions."""
     import yfinance as yf
     start = (dt.date.today()
@@ -138,17 +145,22 @@ def fetch_benchmark() -> pd.Series:
         close = close.iloc[:, 0]
     close.index = pd.to_datetime(close.index).tz_localize(None).normalize()
     close.name = "nifty_close"
-    close.to_frame().to_parquet(BENCHMARK_STORE)
+    store = config.benchmark_store(universe_id)
+    store.parent.mkdir(parents=True, exist_ok=True)
+    close.to_frame().to_parquet(store)
     return close
 
 
-def load_benchmark() -> pd.Series | None:
-    if BENCHMARK_STORE.exists():
-        return pd.read_parquet(BENCHMARK_STORE)["nifty_close"]
+def load_benchmark(universe_id: str = DEFAULT_UNIVERSE) -> pd.Series | None:
+    store = config.benchmark_store(universe_id)
+    if store.exists():
+        return pd.read_parquet(store)["nifty_close"]
     return None
 
 
-def full_backfill_symbols(universe_rows: pd.DataFrame) -> pd.DataFrame:
+def full_backfill_symbols(universe_rows: pd.DataFrame,
+                          universe_id: str = DEFAULT_UNIVERSE
+                          ) -> pd.DataFrame:
     """Fresh 5y fetch for a subset of symbols, merged into the store."""
     start = (dt.date.today()
              - dt.timedelta(days=int(365.25 * config.HISTORY_YEARS)))
@@ -156,9 +168,10 @@ def full_backfill_symbols(universe_rows: pd.DataFrame) -> pd.DataFrame:
         universe_rows["yf_ticker"].tolist(), start.isoformat()))
     if fresh.empty:
         return fresh
-    prices = pd.read_parquet(config.PRICE_STORE)
+    store = config.price_store(universe_id)
+    prices = pd.read_parquet(store)
     merged = (pd.concat([prices, fresh], ignore_index=True)
               .drop_duplicates(subset=["symbol", "date"], keep="last")
               .sort_values(["symbol", "date"]).reset_index(drop=True))
-    merged.to_parquet(config.PRICE_STORE, index=False)
+    merged.to_parquet(store, index=False)
     return fresh

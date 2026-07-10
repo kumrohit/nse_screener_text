@@ -30,37 +30,42 @@ import sys
 
 import pandas as pd
 
-from . import config, data_ingest, dsl, evaluator, indicators, universe
+from . import config, data_ingest, dsl, evaluator, indicators, universe, universes
 
 
-def _load_prices() -> pd.DataFrame:
-    if not config.PRICE_STORE.exists():
-        sys.exit("No price store found. Run `python -m screener.cli "
-                 "backfill` first.")
-    return pd.read_parquet(config.PRICE_STORE)
+def _load_prices(universe_id: str = universes.DEFAULT_UNIVERSE
+                 ) -> pd.DataFrame:
+    store = config.price_store(universe_id)
+    if not store.exists():
+        sys.exit(f"No price store found for universe {universe_id!r}. "
+                 "Run `python -m screener.cli backfill` first.")
+    return pd.read_parquet(store)
 
 
-def cmd_backfill(_args) -> None:
-    uni = universe.fetch_universe(force_refresh=True)
-    prices = data_ingest.full_backfill(uni)
-    data_ingest.fetch_benchmark()
+def cmd_backfill(args) -> None:
+    universe_id = getattr(args, "universe", universes.DEFAULT_UNIVERSE)
+    uni = universe.fetch_universe(force_refresh=True, universe_id=universe_id)
+    prices = data_ingest.full_backfill(uni, universe_id=universe_id)
+    data_ingest.fetch_benchmark(universe_id=universe_id)
     print(f"Backfilled {prices['symbol'].nunique()} symbols, "
           f"{len(prices):,} rows, "
           f"{prices['date'].min().date()} → {prices['date'].max().date()}")
 
 
-def cmd_update(_args) -> None:
-    uni = universe.fetch_universe()
-    prices = data_ingest.incremental_update(uni)
-    data_ingest.fetch_benchmark()
+def cmd_update(args) -> None:
+    universe_id = getattr(args, "universe", universes.DEFAULT_UNIVERSE)
+    uni = universe.fetch_universe(universe_id=universe_id)
+    prices = data_ingest.incremental_update(uni, universe_id=universe_id)
+    data_ingest.fetch_benchmark(universe_id=universe_id)
     print(f"Store now ends {prices['date'].max().date()}")
 
 
 def cmd_verify(args) -> None:
     import sys as _sys
     from . import verify
-    uni = universe.fetch_universe()
-    prices = _load_prices()
+    universe_id = getattr(args, "universe", universes.DEFAULT_UNIVERSE)
+    uni = universe.fetch_universe(universe_id=universe_id)
+    prices = _load_prices(universe_id)
     if getattr(args, "jumps", False):
         j = verify.list_jumps(prices)
         if j.empty:
@@ -82,8 +87,8 @@ def cmd_verify(args) -> None:
     rotated_lines = (ROTATED_LOG_FILE.read_text().strip().splitlines()
                      if ROTATED_LOG_FILE.exists() else None)
     results = verify.verify_store(
-        prices, uni, data_ingest.load_benchmark(), panels, bhav_prices,
-        log_lines, rotated_lines)
+        prices, uni, data_ingest.load_benchmark(universe_id), panels,
+        bhav_prices, log_lines, rotated_lines)
     _sys.exit(verify.print_report(results))
 
 
@@ -159,14 +164,15 @@ def cmd_screen(args) -> None:
         print(json.dumps(spec, indent=2))
         return
 
-    uni = universe.fetch_universe()
-    prices = _load_prices()
+    universe_id = getattr(args, "universe", universes.DEFAULT_UNIVERSE)
+    uni = universe.fetch_universe(universe_id=universe_id)
+    prices = _load_prices(universe_id)
     latest = data_ingest.assert_fresh(prices)
     panels = indicators.build_panels(prices)
     result = evaluator.run_screen(
         panels, spec, universe=uni,
         min_turnover_cr=config.MIN_MEDIAN_TURNOVER_CR,
-        benchmark=data_ingest.load_benchmark())
+        benchmark=data_ingest.load_benchmark(universe_id))
 
     as_of = spec.get("as_of", "latest")
     shown_date = as_of if as_of != "latest" else latest.date()
@@ -197,8 +203,9 @@ def cmd_backtest(args) -> None:
         spec = parser.parse(args.query)
 
     print(dsl.describe(spec))
-    uni = universe.fetch_universe()
-    prices = _load_prices()
+    universe_id = getattr(args, "universe", universes.DEFAULT_UNIVERSE)
+    uni = universe.fetch_universe(universe_id=universe_id)
+    prices = _load_prices(universe_id)
     data_ingest.assert_fresh(prices)
     panels = indicators.build_panels(prices)
     result = bt.backtest_spec(
@@ -206,7 +213,8 @@ def cmd_backtest(args) -> None:
         cooldown=args.cooldown, cost_pct=args.cost_pct,
         min_turnover_cr=config.MIN_MEDIAN_TURNOVER_CR, stride=args.stride,
         min_events=args.min_events, hypothesis=args.hypothesis,
-        benchmark=data_ingest.load_benchmark(), sensitivity=not args.no_sensitivity)
+        benchmark=data_ingest.load_benchmark(universe_id),
+        sensitivity=not args.no_sensitivity)
 
     print(f"\n{result['n_symbols']} symbols, {result['n_events_total']} "
          f"events total ({result['elapsed_sec']}s)")
@@ -246,12 +254,26 @@ def cmd_backtest(args) -> None:
     print(f"\n{result['survivorship_note']}")
 
 
+def _add_universe_arg(p) -> None:
+    """`--universe` (ROADMAP Item 15 Phase A) — only `nifty500` is
+    registered today, but every command that reads/writes a price store
+    already threads the id through, so a second universe (`nse_full`,
+    `nse_etf`) is a pure `universes.py` addition, not a plumbing change."""
+    p.add_argument("--universe", default=universes.DEFAULT_UNIVERSE,
+                   choices=sorted(universes.UNIVERSES),
+                   help=f"screen universe (default {universes.DEFAULT_UNIVERSE})")
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(prog="screener")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
-    sub.add_parser("backfill").set_defaults(func=cmd_backfill)
-    sub.add_parser("update").set_defaults(func=cmd_update)
+    bf = sub.add_parser("backfill")
+    _add_universe_arg(bf)
+    bf.set_defaults(func=cmd_backfill)
+    up = sub.add_parser("update")
+    _add_universe_arg(up)
+    up.set_defaults(func=cmd_update)
     sub.add_parser("bhavcopy-update",
                    help="fetch NSE bhavcopy days (data layer v2, "
                         "side-by-side with yfinance — ROADMAP Item 3)"
@@ -261,6 +283,7 @@ def main() -> None:
     vf.add_argument("--jumps", action="store_true",
                     help="list the exact bars behind the adjustment "
                          "smell test, with split-ratio hints")
+    _add_universe_arg(vf)
     vf.set_defaults(func=cmd_verify)
 
     lg = sub.add_parser("log", help="recent screen runs (replay trail)")
@@ -289,6 +312,7 @@ def main() -> None:
                     help="screen as of this date (YYYY-MM-DD) instead of "
                          "latest — parity with the web UI's date picker")
     sc.add_argument("--out", help="save results CSV to this path")
+    _add_universe_arg(sc)
     sc.set_defaults(func=cmd_screen)
 
     bt = sub.add_parser("backtest",
@@ -321,6 +345,7 @@ def main() -> None:
     bt.add_argument("--no-sensitivity", action="store_true",
                     help="skip the one-at-a-time sensitivity grid "
                          "(faster)")
+    _add_universe_arg(bt)
     bt.set_defaults(func=cmd_backtest)
 
     args = ap.parse_args()
