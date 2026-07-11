@@ -151,8 +151,11 @@ clean: config flip, yfinance to fallback, `delivery` condition +
 accumulation preset, risk log. Delivery-based presets get cohort-seeded
 the same day (their OOS clock starts latest, so no reason to add delay).
 
-**AFTER:** Item 15-B membership build (scope per archaeology); v0.11
-sidebar anytime; first cohort scorecard review ~2 weeks after seeding.
+**AFTER:** Item 17 (cohort replay + performance engine — buildable any
+session, pairs naturally with seeded cohorts since forward cohorts get
+the same metrics panel); Item 15-B membership build (scope per
+archaeology); v0.11 sidebar anytime; first cohort scorecard review
+~2 weeks after seeding.
 
 ---
 
@@ -1085,6 +1088,78 @@ trade tracker: no fills, no partial exits, no P&L accounting.
 - [x] Completion at 60 bars; archived cohorts still in scorecard.
 - [x] Weights: allocation-weighted cohort return differs correctly
       from equal-weight on engineered dispersion.
+
+## 17. Cohort replay & performance engine (v0.15) — in-sample cohort testing
+
+Create a cohort as of ANY historical date and evaluate it to any later
+date up to data availability, with a full performance panel. One metrics
+engine serves BOTH modes: replay cohorts get long windows instantly;
+forward cohorts get the same panel with end = latest bar. Reuses the
+Item-16 record (dates-not-prices, entry at next open, shared baseline
+helper) — this is an extension, not a fork.
+
+### Integrity wall (the non-negotiable)
+
+- [ ] **`mode: "forward" | "replay"`** on every cohort. Replay = any
+      cohort whose as-of date predates its creation timestamp; set
+      automatically, never user-editable. Replay cohorts are
+      **excluded from the OOS scorecard by default** — the date was
+      chosen with the future visible, so they are in-sample by
+      construction. Scorecard shows them, if at all, in a separate
+      clearly-labelled "replay (in-sample)" grouping. UI badge on every
+      replay cohort; survivorship note auto-attached (historical
+      constituents problem, same as the backtester; membership filter
+      from Item 15-B applies when built). A test asserts a replay
+      cohort cannot enter the OOS aggregate.
+
+### Creation
+
+- [ ] Natural flow: run a screen with the existing as-of picker →
+      "Track these matches" → replay cohort with as_of = the screen's
+      date, entry = next trading day's open. API `as_of` param on
+      POST /api/cohorts; CLI `cohort create --as-of YYYY-MM-DD`.
+      Validation: as_of must exist in the store and leave ≥1 later bar.
+
+### Performance engine (`screener/cohort_perf.py`, pure functions)
+
+- [ ] **Window**: open[entry_date] → close[min(end_date, latest bar)];
+      `end_date` param on evaluation (API GET /api/cohorts/{id}/
+      performance?end=…, CLI `cohort perf <id> [--end]`), default
+      latest. end < entry+1 → pending semantics, no metrics.
+- [ ] **Metric set (locked)** — cohort level, weighted (equal or
+      allocation weights): cumulative return gross & net (round-trip
+      haircut); excess vs same-entry-date universe baseline over the
+      identical window (shared helper — never reimplemented) and vs
+      Nifty; annualised volatility of daily cohort returns (√252);
+      max drawdown on the cohort equity curve with peak/trough dates;
+      hit rates (% names positive, % beating baseline); best/worst
+      contributors by weighted contribution. **Sharpe reported only
+      when window ≥ 60 bars**, else "window too short" — annualised
+      Sharpe on a fortnight is noise and the tool says so.
+- [ ] **Per-symbol table**: entry px, end px, return g/n, excess,
+      own max DD, weight, contribution; stale symbols flagged and
+      retained (Item-16 rule unchanged).
+- [ ] **Equity curve series** (cohort vs baseline vs Nifty, indexed to
+      100 at entry) returned for charting; UI cohort-detail view gains
+      the curve chart + metrics panel; milestone table (5/20/60)
+      retained alongside — milestones remain the cross-cohort
+      comparison units, the panel is the deep dive.
+- [ ] Existing forward cohorts gain the same panel with zero migration
+      (mode defaults to "forward" on read for old records).
+
+### Tests (≥12)
+
+- [ ] Replay excluded from OOS scorecard (the wall test).
+- [ ] Mode auto-set; not user-overridable via API payload.
+- [ ] Hand-computed window return, excess, and max drawdown (incl. DD
+      dates) on an engineered path; equity curve indexes to 100.
+- [ ] end_date clamping to latest bar; end<entry+1 → pending; end on a
+      non-trading day resolves to prior bar.
+- [ ] Sharpe suppressed under 60 bars, present and hand-checked over.
+- [ ] Weighted vs equal contribution arithmetic on dispersion.
+- [ ] Adjustment invariance holds for replay windows (reuse the
+      halving test at a historical as_of).
+- [ ] Old cohort records (pre-mode) readable, default forward.
 
 ## 12. Recurring operations (not one-time)
 
