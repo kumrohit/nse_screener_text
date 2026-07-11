@@ -79,40 +79,39 @@ closes.
 
 ---
 
-## SEQUENCING — after v0.13.0 (updated 2026-07-10)
+## SEQUENCING — week of 2026-07-11 → cutover (updated 2026-07-11)
 
-**DONE 2026-07-10** — *Phase-A follow-ups batch*: `nse_etf` onboarded
-(36 curated broad domestic equity-index ETFs — NSE's own ETF listing's
-`Underlying` column turned out too inconsistent to auto-classify, see
-§A below), preset `universes` tags computed from spec sector-usage
-(not hand-maintained) with dropdown filtering live-verified, and the
-sector-data-gap warning (`evaluator.sector_data_gap_warning`, wired
-into `/api/screen`, `/api/backtest`, and both CLI commands) — a
-sector-based screen on `nse_full` now warns loudly instead of silently
-returning zero matches. 16 new tests, 252 total.
+**Session 1 (next Claude Code session): Item 16 cohort tracker.**
+Value compounds with calendar time — every day unbuilt is forward
+evidence lost. Same day it lands, Rohit seeds cohorts from
+support_50ema_uptrend, momentum_12_1_leaders, minervini_stage2, and
+flat_base_52w — on BOTH nifty500 and nse_full — so 5-bar milestones
+mature before the cutover and 20-bar milestones land with the first
+evidence review.
 
-**NOW (next Claude Code session):**
-1. *Item 15-B: point-in-time membership* — still gated on Rohit's data
-   archaeology (how far back do clean NSE reconstitution records go?);
-   the backtester eligibility filter itself is a small session once the
-   membership file exists.
+**Session 2: breadth fields + the universe comparison (resequenced —
+does NOT wait for cutover).** Market-breadth regime fields into the
+cross-sectional pre-pass, then the strategy-preset backtests on
+nifty500 vs nse_full. Prerequisite from Rohit BEFORE the run:
+pre-registered hypotheses per preset per universe, drawn from
+LITERATURE.md effect sizes (the momentum-strengthens-in-breadth
+prediction is the headline one). This run also produces the IS numbers
+that close the deferred backtest evidence loop.
 
-**WAITING (clock, ~2026-07-19) — Item 2 cutover chain:** if the
-cross-source check stays clean → config flip, yfinance to fallback,
-`delivery` condition + accumulation preset, risk log, and the nightly
-cron (mandatory from cutover day — bhavcopy history only accumulates
-forward).
+**Rohit's own tasks this week (no Claude Code needed):**
+- Nightly cron NOW, not at cutover: `update && verify` after 18:30 IST
+  — cohort milestones and the cross-source check both want unattended
+  daily data from today.
+- Membership archaeology hour (gates Item 15-B's scope decision).
+- Write the session-2 hypotheses before session 2 runs.
 
-**THEN (the payoff run):** market-breadth regime fields, then the
-nifty500-vs-nse_full strategy-preset backtest comparison with
-pre-registered hypotheses — closes the preset evidence loop with real
-numbers on both universes.
+**2026-07-19 (clock): cutover chain session** — if cross-source check
+clean: config flip, yfinance to fallback, `delivery` condition +
+accumulation preset, risk log. Delivery-based presets get cohort-seeded
+the same day (their OOS clock starts latest, so no reason to add delay).
 
-**ANYTIME:** v0.11 sidebar (last UI box, cosmetic priority).
-
-**NEW (Item 16):** cohort tracker — buildable now, independent of the
-cutover clock; becomes more valuable the sooner cohorts start aging, so
-early is better than perfect.
+**AFTER:** Item 15-B membership build (scope per archaeology); v0.11
+sidebar anytime; first cohort scorecard review ~2 weeks after seeding.
 
 ---
 
