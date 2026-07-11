@@ -196,6 +196,7 @@
     button, .tabs, .row, select, #presetSel, .btnsm, .chip, .sortsel,
     .toggle, .toast, header .status, #err, #spin,
     #recentPanel, #myScreensPanel, #dashboardPanel, #watchlistPanel,
+    #cohortsPanel,
     .modalOverlay{ display:none !important }
     /* #allocatePanel/#backtestPanel are deliberately NOT in the list
        above: if either is open with computed results, the report

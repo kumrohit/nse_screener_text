@@ -190,6 +190,15 @@ def cmd_screen(args) -> None:
             result.to_csv(args.out, index=False)
             print(f"\nSaved to {args.out}")
 
+    # Shared history with the web UI's /api/screen (same LOG_FILE, same
+    # entry shape) — this is what makes `cohort create --from-last-screen`
+    # work regardless of which surface ran the screen.
+    from .webapp import _log_run
+    matches = [{"symbol": s} for s in result["symbol"]] if not result.empty else []
+    _log_run(spec, str(shown_date),
+             {"matched": len(result), "evaluated": len(panels)}, matches,
+             dsl.spec_hash(spec), universe_id)
+
 
 def cmd_backtest(args) -> None:
     """Event-study backtest for a DSL spec (ROADMAP Item 14) — readable
@@ -259,6 +268,139 @@ def cmd_backtest(args) -> None:
                  f"(base {row['base_value']}): {row['verdict']}")
 
     print(f"\n{result['survivorship_note']}")
+
+
+def cmd_cohort_create(args) -> None:
+    """Freeze a cohort for walk-forward out-of-sample tracking
+    (ROADMAP Item 16) — either the matches from the most recent logged
+    screen for this universe, or an explicit spec + symbol list."""
+    from . import cohorts as cohorts_mod
+    universe_id = getattr(args, "universe", universes.DEFAULT_UNIVERSE)
+
+    if args.symbols:
+        if args.preset:
+            from . import presets
+            spec = dsl.validate(presets.get(args.preset)["spec"])
+        elif args.json:
+            spec = dsl.validate(json.loads(args.query))
+        else:
+            sys.exit("--symbols needs --preset or --json to supply the spec")
+        symbols = args.symbols
+    else:
+        from .webapp import LOG_FILE
+        if not LOG_FILE.exists():
+            sys.exit("No screens logged yet. Run `screen` first, or pass "
+                     "--symbols with --preset/--json.")
+        entries = [json.loads(l) for l in
+                  LOG_FILE.read_text().strip().splitlines() if l]
+        matches = [e for e in entries
+                  if e.get("universe", universes.DEFAULT_UNIVERSE)
+                  == universe_id]
+        if not matches:
+            sys.exit(f"No logged screens for universe {universe_id!r}. Run "
+                     f"`screen --universe {universe_id}` first.")
+        entry = matches[-1]
+        spec, symbols = entry["spec"], entry["matched"]
+        if not symbols:
+            sys.exit("The last screen for this universe matched 0 symbols "
+                     "— nothing to track.")
+
+    weights = cohorts_mod.weights_from_symbols(symbols)
+    cohort = cohorts_mod.create_cohort(
+        universe_id=universe_id, spec=spec, symbols=symbols,
+        weights=weights, notes=args.notes or "")
+    print(dsl.describe(spec))
+    print(f"Created cohort {cohort['cohort_id']} — {len(symbols)} symbols, "
+         f"universe={universe_id}, status={cohort['status']}")
+
+
+def cmd_cohort_list(args) -> None:
+    from . import cohorts as cohorts_mod
+    universe_id = getattr(args, "universe", universes.DEFAULT_UNIVERSE)
+    prices = _load_prices(universe_id)
+    panels = indicators.build_panels(prices)
+    lst = cohorts_mod.list_cohorts(universe_id, panels,
+                                   config.liquidity_gate_cr(universe_id))
+    if not lst:
+        print("No cohorts yet.")
+        return
+    for c in lst:
+        print(f"{c['cohort_id']}  {c['status']:<10} "
+             f"entry={c['entry_date'] or '—':<12} {len(c['symbols']):>3} "
+             f"symbols  {dsl.describe(c['spec'])}")
+
+
+def cmd_cohort_show(args) -> None:
+    from . import cohorts as cohorts_mod
+    universe_id = getattr(args, "universe", universes.DEFAULT_UNIVERSE)
+    prices = _load_prices(universe_id)
+    panels = indicators.build_panels(prices)
+    c = cohorts_mod.get_cohort(universe_id, args.cohort_id, panels,
+                               config.liquidity_gate_cr(universe_id))
+    if c is None:
+        sys.exit(f"No cohort {args.cohort_id!r} in universe {universe_id!r}")
+
+    print(f"Cohort {c['cohort_id']}  status={c['status']}  "
+         f"entry={c['entry_date'] or 'pending'}")
+    print(dsl.describe(c["spec"]))
+    print(f"Symbols ({c['weights']['method']} weighted): "
+         f"{', '.join(c['symbols'])}")
+    for h in cohorts_mod.HORIZONS:
+        m = c["milestones"][str(h)]
+        if m is None:
+            print(f"  {h}-bar: not reached yet")
+            continue
+        print(f"  {h}-bar: gross {m['gross']*100:+.2f}%  net "
+             f"{m['net']*100:+.2f}%  vs. baseline {m['baseline']*100:+.2f}% "
+             f"-> excess net {m['excess_net']*100:+.2f}%  "
+             f"({m['n_stale']} of {m['n_symbols']} stale)")
+    current = cohorts_mod.current_snapshot(c, panels)
+    if current and current["gross"] is not None:
+        print(f"  current (live, unfrozen): gross {current['gross']*100:+.2f}%"
+             f"  net {current['net']*100:+.2f}%")
+
+
+def cmd_scorecard(args) -> None:
+    """Per-spec IS-vs-OOS scorecard (ROADMAP Item 16) — accepts either
+    a raw spec_hash or a preset id (resolved to its spec_hash)."""
+    from . import cohorts as cohorts_mod
+    universe_id = getattr(args, "universe", universes.DEFAULT_UNIVERSE)
+    spec_hash = args.spec_hash_or_preset
+    try:
+        from . import presets
+        spec_hash = dsl.spec_hash(dsl.validate(presets.get(spec_hash)["spec"]))
+    except KeyError:
+        pass  # not a known preset id — treat the argument as a raw spec_hash
+
+    prices = _load_prices(universe_id)
+    panels = indicators.build_panels(prices)
+    from .webapp import BACKTEST_LOG_FILE
+    log_entries = []
+    if BACKTEST_LOG_FILE.exists():
+        log_entries = [json.loads(l) for l in
+                       BACKTEST_LOG_FILE.read_text().strip().splitlines()
+                       if l]
+    sc = cohorts_mod.scorecard(
+        universe_id, spec_hash, panels, config.liquidity_gate_cr(universe_id),
+        backtest_log_entries=log_entries)
+
+    print(f"Scorecard — spec_hash={spec_hash}  universe={universe_id}  "
+         f"({sc['n_cohorts_total']} cohorts)\n")
+    for h in ("5", "20", "60"):
+        hs = sc["horizons"][h]
+        if hs["insufficient"]:
+            print(f"  {h}-bar OOS: insufficient sample "
+                 f"({hs['n_names']} names, {hs['n_cohorts']} cohorts)")
+        else:
+            print(f"  {h}-bar OOS: mean excess net {hs['mean_excess_net']*100:+.2f}%"
+                 f"  hit-rate {hs['hit_rate']*100:.0f}%  "
+                 f"({hs['n_cohorts']} cohorts, {hs['n_names']} names)")
+        is_h = (sc["in_sample"] or {}).get(h)
+        if is_h and not is_h.get("insufficient", True):
+            print(f"  {h}-bar IS:  mean excess net "
+                 f"{is_h['excess_net']['mean']*100:+.2f}%")
+    print(f"\n{sc['footnote']}")
+    print(sc["survivorship_free_note"])
 
 
 def _add_universe_arg(p) -> None:
@@ -354,6 +496,47 @@ def main() -> None:
                          "(faster)")
     _add_universe_arg(bt)
     bt.set_defaults(func=cmd_backtest)
+
+    ch = sub.add_parser("cohort", help="walk-forward out-of-sample "
+                        "tracking for a screen's matches (ROADMAP Item 16)")
+    ch_sub = ch.add_subparsers(dest="cohort_cmd", required=True)
+
+    chc = ch_sub.add_parser("create",
+                            help="freeze a cohort from the last logged "
+                                 "screen, or an explicit spec + symbols")
+    chc.add_argument("--from-last-screen", action="store_true",
+                     help="use the most recent logged screen's spec + "
+                          "matches for this universe (default if "
+                          "--symbols is omitted)")
+    chc.add_argument("--symbols", nargs="+",
+                     help="explicit symbol list (needs --preset or --json "
+                          "to supply the spec)")
+    chc.add_argument("--preset", help="preset id supplying the spec")
+    chc.add_argument("--json", action="store_true",
+                     help="query is a raw DSL JSON spec")
+    chc.add_argument("query", nargs="?", default="",
+                     help="JSON spec (with --json)")
+    chc.add_argument("--notes", default="")
+    _add_universe_arg(chc)
+    chc.set_defaults(func=cmd_cohort_create)
+
+    chl = ch_sub.add_parser("list", help="list this universe's cohorts")
+    _add_universe_arg(chl)
+    chl.set_defaults(func=cmd_cohort_list)
+
+    chs = ch_sub.add_parser("show", help="one cohort's full detail")
+    chs.add_argument("cohort_id")
+    _add_universe_arg(chs)
+    chs.set_defaults(func=cmd_cohort_show)
+
+    scc = sub.add_parser("scorecard",
+                         help="per-spec IS-vs-OOS scorecard (ROADMAP "
+                              "Item 16) — backtest vs. tracked cohorts")
+    scc.add_argument("spec_hash_or_preset",
+                     help="a raw spec_hash, or a preset id (resolved "
+                          "automatically)")
+    _add_universe_arg(scc)
+    scc.set_defaults(func=cmd_scorecard)
 
     args = ap.parse_args()
     args.func(args)

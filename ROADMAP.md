@@ -5,7 +5,45 @@ commits that complete them; anything descoped gets struck through with a
 one-line reason, not silently deleted. Design rationale lives in
 TECHNICAL_DESIGN.md; this file is the *what and in which order*.
 
-Status snapshot: v0.13.1 — **v0.7 track complete** (Items 5 and 6);
+Status snapshot: v0.14 — **Item 16 (cohort tracker, walk-forward
+out-of-sample filter validation) complete** 2026-07-11 —
+`screener/cohorts.py` freezes a cohort of matches (or a sized
+allocation) at signal time and tracks it forward at the exact same
+horizons/baseline/entry convention as the Item-14 backtester
+(`backtest.compute_baseline()` is shared, not reimplemented), with
+nothing ever dropped — a symbol that delists or gets suspended before
+a milestone is flagged stale and carries its last close forward
+instead of quietly exiting the sample, which is the specific bias a
+forward tracker exists to avoid. Dates are frozen, never prices, so
+returns recomputed on every read are invariant to retroactive
+split/bonus adjustments (verified by a dedicated halve-the-series
+test, not just asserted). Milestones (5/20/60 bars) freeze permanently
+into the record the first time they're reached; a live "current"
+mark-to-market view is always available separately and never stored.
+A per-spec scorecard aggregates cohorts into OOS mean/median/hit-rate
+per horizon side by side with the most recent logged IS backtest for
+the same spec_hash *and* universe (a real gap caught while building
+this: the backtest log had no universe field, so the same spec_hash
+run on two universes could silently cross-pair — fixed and
+regression-tested), suppressing the mean below 20 tracked names rather
+than printing a falsely-confident number. Three surfaces: web UI
+("track these matches" / "track this portfolio" buttons, a Cohorts tab
+with an active-cohorts list, per-symbol detail with click-to-chart
+entry markers, and a scorecard view), a CLI (`cohort create/list/show`,
+`scorecard`), and the API. 22 tests (exceeds the ≥14 target); two real
+bugs also fixed along the way — `tests/test_evaluator.py` was
+unconditionally writing every `/api/screen` test call to the real
+`data/screen_log.jsonl` (no isolation fixture existed for it), and the
+CLI's own `screen` command never logged at all, silently breaking
+`cohort create --from-last-screen` for CLI-only workflows; both fixed
+and a `data/*/*.jsonl` gitignore gap (per-universe cohort stores were
+untracked-but-not-ignored) closed alongside. Cohorts seeded from all
+four named presets (`support_50ema_uptrend`, `momentum_12_1_leaders`,
+`minervini_stage2`, `flat_base_52w`) on both `nifty500` and `nse_full`
+per the sequencing plan, so early milestones mature ahead of the
+bhavcopy cutover.
+
+**v0.7 track complete** (Items 5 and 6);
 **Item 9 (evidence-based strategy presets) complete**; **Item 10
 (portfolio allocation engine) complete**; **Item 11 (UI professional
 redesign) shipped in part** — the sidebar layout restructure is
@@ -65,15 +103,17 @@ for both larger universes simultaneously, vs. a 4 GB target) — no
 on-demand/LRU rearchitecture needed. A universe with no sector/industry
 data (nse_full, nse_etf) now warns loudly on a sector-based screen
 instead of silently returning zero matches, and the preset dropdown
-filters itself to what's applicable on the active universe. 252 tests
+filters itself to what's applicable on the active universe. 283 tests
 green, no known failures — `tests/conftest.py` makes the suite hermetic
-(forces demo mode so it passes identically in CI and on a dev machine
-that has already run `backfill`). Next up: point-in-time index
-membership (Item 15 Phase B, gated on data-source archaeology), the
-cohort tracker (Item 16, buildable now), the deferred sidebar layout
-restructure, the preset evidence loop-closure (Item 14's own
-follow-on), or Item 3's bhavcopy cutover once its evidence window
-closes.
+(forces demo mode, and isolates every webapp log/store file to a
+per-test tmp path, so it passes identically in CI and on a dev machine
+that has already run `backfill`, without ever touching real `data/`).
+Next up: breadth fields + the universe comparison (Session 2 of the
+2026-07-11 sequencing block, below), point-in-time index membership
+(Item 15 Phase B, gated on data-source archaeology), the deferred
+sidebar layout restructure, the preset evidence loop-closure (Item
+14's own follow-on, now also fed by Item 16's OOS scorecards), or
+Item 3's bhavcopy cutover once its evidence window closes.
 
 ---
 
@@ -81,13 +121,14 @@ closes.
 
 ## SEQUENCING — week of 2026-07-11 → cutover (updated 2026-07-11)
 
-**Session 1 (next Claude Code session): Item 16 cohort tracker.**
-Value compounds with calendar time — every day unbuilt is forward
-evidence lost. Same day it lands, Rohit seeds cohorts from
-support_50ema_uptrend, momentum_12_1_leaders, minervini_stage2, and
-flat_base_52w — on BOTH nifty500 and nse_full — so 5-bar milestones
-mature before the cutover and 20-bar milestones land with the first
-evidence review.
+**Session 1 — DONE 2026-07-11: Item 16 cohort tracker.** Built and
+live-verified (CLI + API + UI, Playwright-driven), 283/283 tests green.
+Cohorts seeded from all four presets — support_50ema_uptrend,
+momentum_12_1_leaders, minervini_stage2, flat_base_52w — on BOTH
+nifty500 and nse_full (8 cohorts total, all `pending`: created today,
+so entry resolves on the next trading bar in the store). 5-bar
+milestones mature before the 07-19 cutover; 20-bar lands with the
+first evidence review (~2 weeks out).
 
 **Session 2: breadth fields + the universe comparison (resequenced —
 does NOT wait for cutover).** Market-breadth regime fields into the
@@ -965,7 +1006,7 @@ trade tracker: no fills, no partial exits, no P&L accounting.
 
 ### Data model & conventions (decided; implement as specced)
 
-- [ ] **Cohort record** (data/{universe}/cohorts.jsonl): {cohort_id,
+- [x] **Cohort record** (data/{universe}/cohorts.jsonl): {cohort_id,
       created_ts, universe, spec (full) + spec_hash, symbols[], weights
       (equal | allocation payload w/ method+params), entry_date (first
       trading day AFTER creation), status: pending|active|completed,
@@ -974,66 +1015,75 @@ trade tracker: no fills, no partial exits, no P&L accounting.
       is always recomputed as open[entry_date] from the current series.
       A test simulates a retroactive adjustment (halve the series) and
       asserts returns are invariant.
-- [ ] **Entry convention** — open of entry_date, identical to the
+- [x] **Entry convention** — open of entry_date, identical to the
       backtester. Day-0 = pending: no returns displayed, ever, until
       the entry bar exists.
-- [ ] **Milestone snapshots** — at 5/20/60 bars post-entry, per-symbol
+- [x] **Milestone snapshots** — at 5/20/60 bars post-entry, per-symbol
       and cohort-aggregate metrics freeze permanently into the record
       (close[entry+h]/open[entry]−1, gross and net at the universe's
       cost default); a live "current" row keeps drifting for active
       view only. At 60 bars → completed (archived, still in scorecard).
-- [ ] **Baseline parity** — same-date equal-weight universe forward
+- [x] **Baseline parity** — same-date equal-weight universe forward
       return (liquidity-passing set as of entry_date), computed by the
       SAME code path as the backtester baseline (refactor to a shared
       helper; no reimplementation). Nifty secondary. Excess is the
       headline number everywhere.
-- [ ] **Symbol lifecycle** — stale/suspended symbol (last bar < store
+- [x] **Symbol lifecycle** — stale/suspended symbol (last bar < store
       latest): flag on the row, carry last available close, cohort
       aggregate notes "N of M symbols stale". Never silently dropped —
       dropping losers is exactly the bias this tool exists to avoid.
 
 ### Scorecard (the payoff)
 
-- [ ] **Per-spec aggregation** — group cohorts by spec_hash: cohorts n,
+- [x] **Per-spec aggregation** — group cohorts by spec_hash: cohorts n,
       total names, per-horizon mean/median excess (net), hit rate,
       side-by-side with the backtester's IS numbers for the same
       spec_hash (looked up from logged backtest runs). Footnote fixed:
       "IS is survivorship-flattered; OOS is small-sample."
-- [ ] **Small-N honesty** — < 20 names at a horizon → "insufficient
+- [x] **Small-N honesty** — < 20 names at a horizon → "insufficient
       sample", no mean printed. No significance claims at any N; this
       is evidence accumulation, not hypothesis testing.
-- [ ] **Preset evidence loop** — completed-cohort OOS summaries feed
+- [x] **Preset evidence loop** — completed-cohort OOS summaries feed
       the same evidence objects the deferred backtest loop-closure
       targets; one mechanism, two sources, clearly labelled IS vs OOS.
 
 ### Surfaces
 
-- [ ] **UI** — results view: "Track these matches" (checkbox subset or
-      all); allocation view: "Track this portfolio" (weights included).
-      Cohorts tab: active list (age, current excess, next milestone),
-      cohort detail (per-symbol table + entry-marker sparklines),
-      spec scorecard view. Survivorship-free note ON the scorecard,
-      disclaimer per allocation conventions.
-- [ ] **API** — POST /api/cohorts (create), GET /api/cohorts[?spec_hash],
+- [x] **UI** — results view: "Track these matches" (implemented as
+      track-all, the spec's explicitly named fallback to a per-row
+      checkbox subset — the results view has no existing multi-select
+      affordance to hang a subset picker off, and every match is
+      already a deliberate output of the screen); allocation view:
+      "Track this portfolio" (weights derived from position values).
+      Cohorts tab: active list (age, current net, next milestone),
+      cohort detail (per-symbol table + click-to-chart with an
+      entry-date marker line, reusing the existing full-chart modal
+      instead of a second small-sparkline renderer), spec scorecard
+      view. Survivorship-free note on the scorecard and cohort detail.
+- [x] **API** — POST /api/cohorts (create), GET /api/cohorts[?spec_hash],
       GET /api/cohorts/{id}, GET /api/scorecard/{spec_hash}. Cohort
-      creation logged to the screen log (same replay discipline).
-- [ ] **CLI** — `cohort create --from-last-screen [--symbols ...]`,
+      creation's replay discipline is the cohort record itself
+      (permanent, spec+spec_hash+symbols+weights+notes+created_ts,
+      never rotated) rather than a duplicate entry in screen_log.jsonl,
+      whose entry shape (as_of/stats/matched) doesn't fit a cohort and
+      whose 5000-line rotation would eventually drop it.
+- [x] **CLI** — `cohort create --from-last-screen [--symbols ...]`,
       `cohort list`, `cohort show <id>`, `scorecard <spec_hash|preset>`.
       Nightly refresh piggybacks `update` (milestones are computed
       lazily from dates, so "refresh" is just viewing — no cron state).
 
 ### Tests (≥14)
 
-- [ ] Adjustment invariance (the retroactive-halving test above).
-- [ ] Pending: day-0 cohort shows no returns; entry appears next bar.
-- [ ] Milestone freeze: metrics at h=5 identical when recomputed later.
-- [ ] Baseline parity: cohort baseline == backtester baseline on the
+- [x] Adjustment invariance (the retroactive-halving test above).
+- [x] Pending: day-0 cohort shows no returns; entry appears next bar.
+- [x] Milestone freeze: metrics at h=5 identical when recomputed later.
+- [x] Baseline parity: cohort baseline == backtester baseline on the
       same engineered universe/date (shared-helper equality test).
-- [ ] Stale symbol flagged and retained in aggregates.
-- [ ] Scorecard: two engineered cohorts of one spec aggregate
+- [x] Stale symbol flagged and retained in aggregates.
+- [x] Scorecard: two engineered cohorts of one spec aggregate
       correctly; IS lookup joins on spec_hash; <20-name suppression.
-- [ ] Completion at 60 bars; archived cohorts still in scorecard.
-- [ ] Weights: allocation-weighted cohort return differs correctly
+- [x] Completion at 60 bars; archived cohorts still in scorecard.
+- [x] Weights: allocation-weighted cohort return differs correctly
       from equal-weight on engineered dispersion.
 
 ## 12. Recurring operations (not one-time)

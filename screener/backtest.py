@@ -125,7 +125,7 @@ def _asof_map(dst_index: pd.DatetimeIndex, src_index: pd.DatetimeIndex,
     return pd.Series(out, index=dst_index)
 
 
-def _common_dates(panels: dict[str, pd.DataFrame]) -> pd.DatetimeIndex:
+def common_dates(panels: dict[str, pd.DataFrame]) -> pd.DatetimeIndex:
     all_dates = sorted(set().union(*(p.index for p in panels.values())))
     return pd.DatetimeIndex(all_dates)
 
@@ -422,7 +422,7 @@ def _symbol_signal(panel, screen, *, symbol, sector_by_symbol, benchmark,
 
 
 # ------------------------------------------------------------ returns / baseline
-def _fwd_return_series(panel: pd.DataFrame, h: int) -> pd.Series:
+def fwd_return_series(panel: pd.DataFrame, h: int) -> pd.Series:
     entry = panel["open"].shift(-1)
     exit_ = panel["close"].shift(-h)
     with np.errstate(invalid="ignore", divide="ignore"):
@@ -431,12 +431,33 @@ def _fwd_return_series(panel: pd.DataFrame, h: int) -> pd.Series:
     return ret.where(valid)
 
 
-def _liquidity_series(panel: pd.DataFrame, min_turnover_cr: float
+def liquidity_series(panel: pd.DataFrame, min_turnover_cr: float
                       ) -> pd.Series:
     if not min_turnover_cr:
         return pd.Series(True, index=panel.index)
     med = panel["turnover_cr"].rolling(20, min_periods=20).median()
     return (med >= min_turnover_cr).fillna(False)
+
+
+def compute_baseline(panels: dict[str, pd.DataFrame], symbols: list[str],
+                     horizons: tuple[int, ...], min_turnover_cr: float
+                     ) -> dict[int, pd.Series]:
+    """Same-date equal-weight mean forward return across all
+    liquidity-passing universe symbols, per horizon — indexed by date.
+    This is THE baseline every event/cohort return in this codebase is
+    measured against (ROADMAP Item 14's backtester and Item 16's cohort
+    tracker share this one computation, not two independent
+    reimplementations, per Item 16's explicit requirement)."""
+    fwd = {h: {sym: fwd_return_series(panels[sym], h) for sym in symbols}
+          for h in horizons}
+    liq_all = {sym: liquidity_series(panels[sym], min_turnover_cr)
+              for sym in symbols}
+    baseline = {}
+    for h in horizons:
+        cols = {sym: fwd[h][sym].where(liq_all[sym]) for sym in symbols}
+        baseline[h] = pd.concat(cols, axis=1, sort=True).mean(
+            axis=1, skipna=True)
+    return baseline
 
 
 def _dedup_events(idx_true: np.ndarray, cooldown: int) -> list[int]:
@@ -613,7 +634,7 @@ def backtest_spec(panels: dict[str, pd.DataFrame],
                       if c["type"] in EXPENSIVE_CROSS_TYPES}
     dates_grid, cs_grid = None, {}
     if windows_needed:
-        all_dates = _common_dates(panels)
+        all_dates = common_dates(panels)
         dates_grid = all_dates[::stride]
         if len(all_dates) and dates_grid[-1] != all_dates[-1]:
             dates_grid = dates_grid.append(pd.DatetimeIndex([all_dates[-1]]))
@@ -633,18 +654,12 @@ def backtest_spec(panels: dict[str, pd.DataFrame],
                                 dates_grid=dates_grid, cs_grid=cs_grid)
         except RuntimeError:
             continue
-        liq = _liquidity_series(panel, min_turnover_cr)
+        liq = liquidity_series(panel, min_turnover_cr)
         signals[sym] = (sig & liq).fillna(False)
 
-    fwd = {h: {sym: _fwd_return_series(panels[sym], h) for sym in symbols}
+    fwd = {h: {sym: fwd_return_series(panels[sym], h) for sym in symbols}
           for h in horizons}
-    liq_all = {sym: _liquidity_series(panels[sym], min_turnover_cr)
-              for sym in symbols}
-    baseline = {}
-    for h in horizons:
-        cols = {sym: fwd[h][sym].where(liq_all[sym]) for sym in symbols}
-        baseline[h] = pd.concat(cols, axis=1, sort=True).mean(
-            axis=1, skipna=True)
+    baseline = compute_baseline(panels, symbols, horizons, min_turnover_cr)
 
     events = []
     for sym, sig in signals.items():
@@ -742,7 +757,7 @@ def verify_vectorizer_consistency(panels: dict[str, pd.DataFrame],
                       if c["type"] in EXPENSIVE_CROSS_TYPES}
     dates_grid, cs_grid = None, {}
     if windows_needed:
-        all_dates = _common_dates(panels)
+        all_dates = common_dates(panels)
         dates_grid = all_dates[::stride]
         for d in dates_grid:
             d_str = str(pd.Timestamp(d).date())

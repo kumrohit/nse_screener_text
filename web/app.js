@@ -134,13 +134,16 @@ function resetAll(){
     const el=$(id); el.style.display="none"; el.innerHTML="";
     if(btn){const [b,label]=btn.split("|"); $(b).textContent=label;}
   });
+  $("btnTrackCohort").textContent="📈 track these matches";
+  $("btnTrackCohort").disabled=false;
   // results & footer
   $("results").innerHTML=""; $("foot").innerHTML="";
   // collapsible panels + their toggle labels
   [["recentPanel","btnRecent","recent screens"],
    ["myScreensPanel","btnMyScreens","manage my screens"],
    ["dashboardPanel","btnDashboard","📊 dashboard"],
-   ["watchlistPanel","btnWatchlist","☆ watchlist"]].forEach(([p,b,label])=>{
+   ["watchlistPanel","btnWatchlist","☆ watchlist"],
+   ["cohortsPanel","btnCohorts","📈 cohorts"]].forEach(([p,b,label])=>{
     $(p).style.display="none"; $(p).innerHTML=""; $(b).textContent=label;
   });
   // chart modal, if open
@@ -439,7 +442,8 @@ function renderAllocationResult(j){
       j.excluded.map(e=>`${e.symbol} (${e.reason})`).join("; ")}</div>`;
   }
   html += `<div class="capnote" style="margin-top:6px">${j.disclaimer}</div>
-    <button class="btnsm" style="margin-top:6px" onclick="exportAllocationCsv()" type="button">export allocation to CSV</button>`;
+    <button class="btnsm" style="margin-top:6px" onclick="exportAllocationCsv()" type="button">export allocation to CSV</button>
+    <button class="btnsm" style="margin-top:6px" onclick="trackAllocationAsCohort(this)" type="button">📈 track this portfolio</button>`;
   return html;
 }
 function exportAllocationCsv(){
@@ -694,11 +698,228 @@ async function switchUniverse(){
     $("results").innerHTML="";
     LAST_MATCHES=[]; LAST_SPEC=null; spec=null;
     $("btnRun").disabled = tab==="en" ? !spec : false;
+    $("cohortsPanel").style.display="none"; $("cohortsPanel").innerHTML="";
+    $("btnCohorts").textContent="📈 cohorts";
+    COHORTS_CACHE=[]; COHORTS_VIEW="list";
   }catch(e){
     err("Could not switch universe: "+e.message);
     $("status").innerHTML=prevStatus;
   }
   busy(false);
+}
+
+// ---------------------------------------------------------------- cohort tracker (ROADMAP Item 16)
+// Walk-forward out-of-sample tracking — the complement to the backtester's
+// in-sample event study. A cohort freezes a set of matches (or a sized
+// allocation) at signal time and tracks them forward; nothing is ever
+// dropped, even names that later delist or get suspended (flagged stale
+// instead) — see screener/cohorts.py's module docstring for the full
+// methodology this view surfaces.
+let COHORTS_CACHE=[], COHORTS_VIEW="list", COHORTS_DETAIL_ID=null,
+    COHORTS_SCORECARD_HASH=null, COHORTS_SCORECARD_CACHE={};
+
+async function trackMatchesAsCohort(btnEl){
+  if(!LAST_SPEC || !LAST_MATCHES.length){ err("Run a screen with matches first."); return }
+  try{
+    const symbols = LAST_MATCHES.map(m=>m.symbol);
+    const j = await api("/api/cohorts", {spec: LAST_SPEC, symbols});
+    if(btnEl){btnEl.textContent="📈 tracking"; btnEl.disabled=true}
+    toast(`Tracking ${symbols.length} matches — cohort ${j.cohort_id}`);
+  }catch(e){ err("Could not create cohort: "+e.message) }
+}
+async function trackAllocationAsCohort(btnEl){
+  if(!LAST_SPEC || !LAST_ALLOCATION || !LAST_ALLOCATION.positions.length){
+    err("Run an allocation first."); return
+  }
+  try{
+    const positions = LAST_ALLOCATION.positions.map(p=>({symbol:p.symbol, value:p.value}));
+    const j = await api("/api/cohorts",
+      {spec: LAST_SPEC, positions, method: LAST_ALLOCATION.method});
+    if(btnEl){btnEl.textContent="📈 tracking"; btnEl.disabled=true}
+    toast(`Tracking portfolio (${positions.length} positions) — cohort ${j.cohort_id}`);
+  }catch(e){ err("Could not create cohort: "+e.message) }
+}
+
+function toggleCohorts(){
+  const p=$("cohortsPanel"), opening=p.style.display==="none";
+  p.style.display=opening?"block":"none";
+  $("btnCohorts").textContent=opening?"hide cohorts":"📈 cohorts";
+  if(opening){ COHORTS_VIEW="list"; loadCohortsList(); }
+}
+async function loadCohortsList(){
+  const p=$("cohortsPanel");
+  p.innerHTML=`<div class="pdesc" style="display:block">loading…</div>`;
+  try{
+    COHORTS_CACHE = await api("/api/cohorts");
+    renderCohortsPanel();
+  }catch(e){
+    p.innerHTML=`<div class="pdesc" style="display:block">Could not load cohorts: ${e.message}</div>`;
+  }
+}
+function backToCohortsList(){ COHORTS_VIEW="list"; renderCohortsPanel(); }
+function openCohortSymbolChart(sym){
+  const c=COHORTS_CACHE.find(x=>x.cohort_id===COHORTS_DETAIL_ID);
+  if(!c) return;
+  openChart(sym, c.spec, c.entry_date);
+}
+function openCohortDetail(id){ COHORTS_VIEW="detail"; COHORTS_DETAIL_ID=id; renderCohortsPanel(); }
+function openCohortScorecard(specHash){
+  COHORTS_VIEW="scorecard"; COHORTS_SCORECARD_HASH=specHash;
+  renderCohortsPanel();
+  loadScorecard(specHash);
+}
+async function loadScorecard(specHash){
+  try{
+    const j = await api("/api/scorecard/"+specHash);
+    COHORTS_SCORECARD_CACHE[specHash]=j;
+    if(COHORTS_VIEW==="scorecard" && COHORTS_SCORECARD_HASH===specHash) renderCohortsPanel();
+  }catch(e){
+    if(COHORTS_VIEW==="scorecard" && COHORTS_SCORECARD_HASH===specHash){
+      $("cohortsPanel").innerHTML=`<button class="btnsm" onclick="backToCohortsList()" type="button">← back to cohorts</button>
+        <div class="pdesc" style="display:block;margin-top:8px">Could not load scorecard: ${e.message}</div>`;
+    }
+  }
+}
+
+function cohortAgeDays(c){
+  if(!c.entry_date) return null;
+  return Math.floor((Date.now()-new Date(c.entry_date).getTime())/86400000);
+}
+function cohortSpecSummary(c){
+  if(c.notes) return c.notes;
+  const conds=(c.spec.conditions||[]);
+  return conds.map(x=>x.type).join(" + ")||"(no conditions)";
+}
+function nextMilestoneLabel(c){
+  for(const h of [5,20,60]){ if(c.milestones[String(h)]===null) return `${h}-bar pending` }
+  return "complete";
+}
+function renderCohortsPanel(){
+  const p=$("cohortsPanel");
+  if(COHORTS_VIEW==="detail"){ renderCohortDetail(p); return }
+  if(COHORTS_VIEW==="scorecard"){ renderCohortScorecard(p); return }
+  if(!COHORTS_CACHE.length){
+    p.innerHTML=`<div class="pdesc" style="display:block">No cohorts tracked yet — click `+
+      `"track these matches" on a screen's results, or "track this `+
+      `portfolio" after allocating.</div>`;
+    return;
+  }
+  const rows=COHORTS_CACHE.map(c=>{
+    const age=cohortAgeDays(c), cur=c.current;
+    return `
+    <div class="recent-row" tabindex="0" role="button"
+         aria-label="Open cohort ${c.cohort_id}"
+         onclick="openCohortDetail('${c.cohort_id}')"
+         onkeydown="onCardKey(event,'${c.cohort_id}',openCohortDetail)">
+      <span class="sym" style="color:var(--amber);min-width:auto">${c.cohort_id}</span>
+      <span class="mini">${c.status}${age!==null?` · ${age}d`:""}</span>
+      <span class="mini">${c.symbols.length} symbols</span>
+      <span class="mini">${cur && cur.net!==null?`current net ${btSigned(cur.net)}`:"—"}</span>
+      <span class="mini">${nextMilestoneLabel(c)}</span>
+      <span class="cname">${cohortSpecSummary(c)}</span>
+      <button class="btnsm" onclick="event.stopPropagation();openCohortScorecard('${c.spec_hash}')" type="button">scorecard</button>
+    </div>`;
+  }).join("");
+  p.innerHTML=`<div class="pdesc" style="display:block;margin-bottom:8px">Walk-forward `+
+    `out-of-sample tracking — every tracked symbol stays in its cohort `+
+    `even if later delisted or suspended (survivorship-free by `+
+    `construction).</div>${rows}`;
+}
+function renderCohortDetail(p){
+  const c=COHORTS_CACHE.find(x=>x.cohort_id===COHORTS_DETAIL_ID);
+  if(!c){ p.innerHTML=`<button class="btnsm" onclick="backToCohortsList()" type="button">← back to cohorts</button>
+    <div class="empty" style="margin-top:8px">Cohort not found.</div>`; return }
+  const milestoneSummary=[5,20,60].map(h=>{
+    const m=c.milestones[String(h)];
+    if(!m) return `<div class="pdesc" style="display:block"><b>${h}-bar:</b> not reached yet</div>`;
+    return `<div class="pdesc" style="display:block"><b>${h}-bar</b> `+
+      `(frozen ${m.frozen_at.replace("T"," ").slice(0,16)}): gross ${btSigned(m.gross)} / `+
+      `net ${btSigned(m.net)} vs. baseline ${btSigned(m.baseline)} → `+
+      `excess (net) ${btSigned(m.excess_net)} · ${m.n_stale}/${m.n_symbols} stale</div>`;
+  }).join("");
+  const symRows=c.symbols.map(sym=>{
+    const w=c.weights.by_symbol[sym];
+    const cells=[5,20,60].map(h=>{
+      const m=c.milestones[String(h)];
+      const ps=m && m.per_symbol[sym];
+      if(!ps || ps.return===null) return `<td style="padding:5px 8px" class="mini">—</td>`;
+      return `<td style="padding:5px 8px">${btSigned(ps.return)}${ps.stale?
+        ` <span class="mini" title="stopped trading before this milestone">stale</span>`:""}</td>`;
+    }).join("");
+    const cur=c.current && c.current.per_symbol[sym];
+    const curCell=cur && cur.return!==null ? btSigned(cur.return) : "—";
+    return `<tr style="border-bottom:1px dashed var(--line)">
+      <td style="padding:5px 8px"><b class="sym" style="font-size:inherit;cursor:pointer" tabindex="0" role="button"
+          aria-label="Chart ${sym} with entry marker"
+          onclick="openCohortSymbolChart('${sym}')"
+          onkeydown="onCardKey(event,'${sym}',openCohortSymbolChart)">${sym}</b></td>
+      <td style="padding:5px 8px" class="mini">${(w*100).toFixed(1)}%</td>
+      ${cells}
+      <td style="padding:5px 8px">${curCell}</td>
+    </tr>`;
+  }).join("");
+  p.innerHTML=`
+    <button class="btnsm" onclick="backToCohortsList()" type="button">← back to cohorts</button>
+    <div class="pdesc" style="display:block;margin-top:8px">
+      <b style="color:var(--text)">${c.cohort_id}</b> · ${c.status} · universe ${c.universe}
+      · created ${c.created_ts.replace("T"," ").slice(0,16)}
+      ${c.entry_date?` · entered ${c.entry_date}`:" · pending entry"}
+      ${c.notes?`<br>${c.notes}`:""}
+    </div>
+    <div class="row" style="margin-top:8px">
+      <button class="btnsm" onclick="openCohortScorecard('${c.spec_hash}')" type="button">view scorecard for this spec</button>
+    </div>
+    <div class="eyebrow" style="margin-top:14px">Milestones</div>
+    ${milestoneSummary}
+    <div class="eyebrow" style="margin-top:14px">Symbols (${c.symbols.length}, ${c.weights.method} weighted)</div>
+    <table style="width:100%;border-collapse:collapse;font-family:var(--sans);font-size:12px">
+      <thead><tr style="border-bottom:1px solid var(--line);text-align:left;color:var(--muted)">
+        <th style="padding:5px 8px">Symbol</th><th style="padding:5px 8px">Weight</th>
+        <th style="padding:5px 8px">5-bar</th><th style="padding:5px 8px">20-bar</th>
+        <th style="padding:5px 8px">60-bar</th><th style="padding:5px 8px">Current</th>
+      </tr></thead>
+      <tbody>${symRows}</tbody>
+    </table>
+    <div class="evcaveat" style="margin-top:10px;opacity:.85">Survivorship-free by `+
+      `construction — every tracked symbol stays in this cohort even if `+
+      `later delisted or suspended (flagged stale above), never dropped.</div>`;
+}
+function renderCohortScorecard(p){
+  const j=COHORTS_SCORECARD_CACHE[COHORTS_SCORECARD_HASH];
+  if(!j){
+    p.innerHTML=`<button class="btnsm" onclick="backToCohortsList()" type="button">← back to cohorts</button>
+      <div class="pdesc" style="display:block;margin-top:8px">loading…</div>`;
+    return;
+  }
+  const rows=[5,20,60].map(h=>{
+    const oos=j.horizons[String(h)];
+    const is=j.in_sample ? j.in_sample[String(h)] : null;
+    const isCell = !is ? `<span class="mini">no backtest logged</span>`
+      : is.insufficient ? `<span class="mini">insufficient events</span>`
+      : `${btSigned(is.excess_net.mean)} mean / ${btSigned(is.excess_net.median)} median `+
+        `/ ${btPct(is.excess_net.hit_rate)} hit (${is.count} events)`;
+    const oosCell = oos.insufficient
+      ? `<span class="mini">insufficient sample (${oos.n_names} names)</span>`
+      : `${btSigned(oos.mean_excess_net)} mean / ${btSigned(oos.median_excess_net)} median `+
+        `/ ${btPct(oos.hit_rate)} hit (${oos.n_names} names, ${oos.n_cohorts} cohorts)`;
+    return `<tr style="border-bottom:1px dashed var(--line)">
+      <td style="padding:5px 8px">${h}-bar</td>
+      <td style="padding:5px 8px">${isCell}</td>
+      <td style="padding:5px 8px">${oosCell}</td>
+    </tr>`;
+  }).join("");
+  p.innerHTML=`
+    <button class="btnsm" onclick="backToCohortsList()" type="button">← back to cohorts</button>
+    <div class="eyebrow" style="margin-top:10px">Scorecard — spec ${j.spec_hash}</div>
+    <table style="width:100%;border-collapse:collapse;font-family:var(--sans);font-size:12px;margin-top:6px">
+      <thead><tr style="border-bottom:1px solid var(--line);text-align:left;color:var(--muted)">
+        <th style="padding:5px 8px">Horizon</th><th style="padding:5px 8px">In-sample (backtest)</th>
+        <th style="padding:5px 8px">Out-of-sample (cohorts)</th>
+      </tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+    <div class="capnote" style="margin-top:6px">${j.footnote}</div>
+    <div class="evcaveat" style="margin-top:6px;opacity:.85">${j.survivorship_free_note}</div>`;
 }
 
 async function init(){
@@ -776,16 +997,17 @@ const signed=v=>v===null||v===undefined?"—":
 let CHART_DATA=null, CHART_ZOOM=null;
 const CHART_W=900, CHART_HP=340, CHART_HV=100, CHART_GAP=28, CHART_PAD=10;
 
-let CHART_OPENER_EL=null;
-async function openChart(symbol){
+let CHART_OPENER_EL=null, CHART_ENTRY_DATE=null;
+async function openChart(symbol, spec=LAST_SPEC, entryDate=null){
   const modal=$("chartModal");
   CHART_OPENER_EL=document.activeElement;  // restore focus here on close
+  CHART_ENTRY_DATE=entryDate;
   $("chartModalTitle").textContent=symbol+" — loading…";
   $("chartModalBody").innerHTML="";
   modal.style.display="flex";
   $("chartModalClose").focus();
   try{
-    const j=await api("/api/chart",{symbol, spec:LAST_SPEC});
+    const j=await api("/api/chart",{symbol, spec});
     CHART_DATA=j; CHART_DATA.symbol=symbol; CHART_ZOOM=null;
     renderChart();
   }catch(e){
@@ -795,7 +1017,7 @@ async function openChart(symbol){
 }
 function closeChartModal(){
   $("chartModal").style.display="none";
-  CHART_DATA=null; CHART_ZOOM=null;
+  CHART_DATA=null; CHART_ZOOM=null; CHART_ENTRY_DATE=null;
   if(CHART_OPENER_EL){ CHART_OPENER_EL.focus(); CHART_OPENER_EL=null; }
 }
 document.addEventListener("keydown", e=>{
@@ -841,6 +1063,14 @@ function renderChart(){
     svg+=`<line x1="${CHART_PAD}" x2="${CHART_W-CHART_PAD}" y1="${Y(v).toFixed(1)}" y2="${Y(v).toFixed(1)}" stroke="var(--muted)" stroke-dasharray="4 4" stroke-width="1"/>`;
     leg+=`<span>┄ ${k} ${v}</span>`;
   });
+  if(CHART_ENTRY_DATE){
+    const entryIdx=dates.indexOf(CHART_ENTRY_DATE);
+    if(entryIdx>=0){
+      const ex=X(entryIdx).toFixed(1);
+      svg+=`<line x1="${ex}" x2="${ex}" y1="${CHART_PAD}" y2="${CHART_HP-CHART_PAD}" stroke="var(--pass)" stroke-width="1.5" stroke-dasharray="2 3"/>`;
+      leg+=`<span style="color:var(--pass)">┆ cohort entry ${CHART_ENTRY_DATE}</span>`;
+    }
+  }
   const finiteVol=vol.filter(v=>v!==null&&isFinite(v));
   const vmax=finiteVol.length?Math.max(...finiteVol):1;
   const vBase=CHART_HP+CHART_GAP+CHART_HV-CHART_PAD;
@@ -1054,6 +1284,8 @@ function render(r){
   LAST_BACKTEST=null;
   $("backtestPanel").style.display="none";
   $("btnBacktest").textContent="🧪 backtest";
+  $("btnTrackCohort").textContent="📈 track these matches";
+  $("btnTrackCohort").disabled=false;
 
   const st=r.stats, cells=[
     ["Universe",st.universe],["Liquidity-excluded",st.liquidity_excluded],

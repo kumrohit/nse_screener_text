@@ -40,12 +40,14 @@
       <button class="btnsm" onclick="saveCurrentAsPreset()" type="button">💾 save as my screen</button>
       <button class="btnsm" id="btnMyScreens" onclick="toggleMyScreens()" type="button">manage my screens</button>
       <button class="btnsm" id="btnDashboard" onclick="toggleDashboard()" type="button">📊 dashboard</button>
+      <button class="btnsm" id="btnCohorts" onclick="toggleCohorts()" type="button">📈 cohorts</button>
     </div>
     <div class="pdesc" id="pdesc"></div>
     <div id="recentPanel" style="display:none;margin-top:12px"></div>
     <div id="myScreensPanel" style="display:none;margin-top:12px"></div>
     <div id="dashboardPanel" style="display:none;margin-top:12px"></div>
     <div id="watchlistPanel" style="display:none;margin-top:12px"></div>
+    <div id="cohortsPanel" style="display:none;margin-top:12px"></div>
   </div>
 
   <div class="err" id="err"></div>
@@ -64,6 +66,7 @@
       <button class="btnsm" id="btnExport" onclick="exportCsv()" type="button">export matches to CSV</button>
       <button class="btnsm" id="btnAllocate" onclick="toggleAllocate()" type="button">💰 allocate</button>
       <button class="btnsm" id="btnBacktest" onclick="toggleBacktest()" type="button">🧪 backtest</button>
+      <button class="btnsm" id="btnTrackCohort" onclick="trackMatchesAsCohort(this)" type="button">📈 track these matches</button>
       <button class="btnsm" onclick="window.print()" type="button">🖨 print report</button>
     </div>
     <div id="diffBox" style="display:none;padding:10px 16px;border-top:1px solid var(--line)"></div>

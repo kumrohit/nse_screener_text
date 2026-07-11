@@ -1,0 +1,455 @@
+"""Cohort tracker — walk-forward out-of-sample filter validation
+(ROADMAP Item 16, v0.14).
+
+Answers the question the backtester structurally cannot: does this
+filter's edge hold up on names nobody hand-picked, followed forward in
+real time, with the ones that go bad NOT quietly excluded? A cohort
+freezes a set of matches (or a sized allocation) at signal time and
+tracks them forward at the exact same horizons/baseline/entry
+convention as `screener/backtest.py`, so IS (backtest) and OOS (cohort)
+numbers for the same spec are directly comparable. This is a *filter
+validator*, not a trade tracker: no fills, no partial exits, no P&L
+accounting — see `screener/allocate.py` for position sizing and
+`screener/backtest.py` for the in-sample event study this complements.
+
+Methodology — locked, see ROADMAP.md Item 16:
+
+  Dates frozen, never prices   A cohort record stores `entry_date`
+                                (a string) and nothing price-derived
+                                until a milestone freezes. Returns are
+                                recomputed from the live store on every
+                                read until frozen, so a retroactive
+                                split/bonus adjustment changes nothing
+                                (percentage returns are scale-invariant
+                                by construction — verified by a
+                                dedicated test, not just asserted).
+  Entry convention              open[entry_date], identical to the
+                                backtester's open[t+1] — entry_date IS
+                                the first trading day after the cohort
+                                was created, so "the day before
+                                entry_date" plays exactly the role of
+                                the backtester's signal bar t. Day-0 is
+                                `pending`: no returns, ever, until that
+                                bar actually exists in the store.
+  Milestone snapshots           At 5/20/60 bars post-entry (counted the
+                                same way backtest.py counts h — from
+                                the signal-bar equivalent, not from
+                                entry itself), per-symbol and cohort-
+                                aggregate returns freeze permanently
+                                into the record the first time they're
+                                computed. A live, never-frozen "current"
+                                mark-to-market value is always
+                                available separately for the active-
+                                cohorts view.
+  Baseline parity                Same-date equal-weight universe
+                                forward return — computed by
+                                `backtest.compute_baseline()`, the
+                                exact same function the backtester
+                                calls, not a reimplementation.
+  Symbol lifecycle               A symbol that stops trading before a
+                                milestone is reached (delisted,
+                                suspended) is flagged `stale` and its
+                                last available close carries forward as
+                                the exit price — never silently
+                                dropped from the cohort's aggregate,
+                                which is the whole point of a forward
+                                tracker: the backtester's survivorship
+                                bias comes from exactly this kind of
+                                quiet exclusion.
+  Scorecard honesty               A spec's cohorts aggregate into an
+                                IS-vs-OOS scorecard; below 20 total
+                                names at a horizon, the mean is
+                                suppressed as "insufficient sample" —
+                                this is evidence accumulation, not
+                                hypothesis testing, and says so.
+"""
+from __future__ import annotations
+
+import datetime as _dt
+import json as _json
+import uuid as _uuid
+
+import numpy as np
+import pandas as pd
+
+from . import backtest, config, dsl
+
+HORIZONS = (5, 20, 60)
+MIN_SCORECARD_NAMES = 20
+
+STATUS_PENDING = "pending"
+STATUS_ACTIVE = "active"
+STATUS_COMPLETED = "completed"
+
+SURVIVORSHIP_FREE_NOTE = (
+    "Out-of-sample cohorts are survivorship-free by construction: every "
+    "tracked symbol stays in its cohort even if later delisted or "
+    "suspended (flagged stale, never dropped). This is the one bias the "
+    "backtester cannot fully remove — IS (backtest) numbers are "
+    "survivorship-flattered, OOS (cohort) numbers are small-sample. "
+    "Neither is a return forecast; both are for ranking filters."
+)
+
+
+# ------------------------------------------------------------ storage
+def _load_all(universe_id: str) -> list[dict]:
+    f = config.cohorts_file(universe_id)
+    if not f.exists():
+        return []
+    return [_json.loads(line) for line in f.read_text().strip().splitlines()
+           if line]
+
+
+def _save_all(universe_id: str, cohorts: list[dict]) -> None:
+    f = config.cohorts_file(universe_id)
+    f.parent.mkdir(parents=True, exist_ok=True)
+    body = "\n".join(_json.dumps(c) for c in cohorts)
+    f.write_text(body + ("\n" if cohorts else ""))
+
+
+# ------------------------------------------------------------ weights
+def weights_from_symbols(symbols: list[str]) -> dict:
+    """Equal weight — 'track these matches' from a plain screen."""
+    n = len(symbols)
+    return {"method": "equal",
+           "by_symbol": {s: round(1.0 / n, 6) for s in symbols}}
+
+
+def weights_from_positions(positions: list[dict], method: str) -> dict:
+    """'Track this portfolio' from an `allocate()` result's `positions`
+    list. Weight = each position's share of the TRACKED capital (sum
+    of the positions themselves), not the original allocation's input
+    capital — un-deployed cash isn't part of what's being tracked, so
+    it isn't diluting the measured return. Weights always sum to 1.0
+    regardless of origin, so equal- and allocation-weighted cohorts
+    aggregate the same way."""
+    total = sum(p["value"] for p in positions)
+    if total <= 0:
+        raise ValueError("positions have zero total value")
+    return {"method": method,
+           "by_symbol": {p["symbol"]: round(p["value"] / total, 6)
+                        for p in positions}}
+
+
+# ------------------------------------------------------------ calendar / entry
+def _next_trading_day(panels: dict[str, pd.DataFrame], symbols: list[str],
+                      after: pd.Timestamp) -> str | None:
+    """First trading day strictly after `after`, using the union of
+    dates across the cohort's own symbols (falls back to the full
+    universe if none of them have data — shouldn't happen for symbols
+    a screen just matched, but never silently guess an entry date)."""
+    ref = {s: panels[s] for s in symbols if s in panels} or panels
+    if not ref:
+        return None
+    dates = backtest.common_dates(ref)
+    later = dates[dates > after]
+    return str(later[0].date()) if len(later) else None
+
+
+def _signal_row(panel: pd.DataFrame, entry_date: str) -> int | None:
+    """Row index t such that panel.index[t+1] is entry_date's own bar
+    on this symbol's panel — the backtester's signal-bar convention,
+    reverse-engineered from a known entry date instead of a fired
+    condition. None if this symbol's panel doesn't have that bar yet."""
+    ts = pd.Timestamp(entry_date)
+    idx = panel.index[panel.index == ts]
+    if not len(idx):
+        return None
+    row = panel.index.get_loc(ts)
+    return row - 1 if row > 0 else None
+
+
+def _milestone_reached(panels: dict[str, pd.DataFrame], entry_date: str,
+                       h: int) -> bool:
+    """Has horizon h (bars, backtester-counted from the signal bar)
+    elapsed since entry, using the shared universe calendar — not any
+    one symbol's own history, which may be gappy or stale. This is
+    what lets a per-symbol staleness check distinguish 'this name
+    delisted early' from 'the cohort just hasn't aged that far yet'."""
+    dates = backtest.common_dates(panels)
+    pos = dates.searchsorted(pd.Timestamp(entry_date))
+    target = pos - 1 + h
+    return 0 <= target < len(dates)
+
+
+def _symbol_return(panel: pd.DataFrame, entry_date: str, h: int
+                   ) -> tuple[float | None, bool]:
+    """(return, stale) at horizon h for one symbol, given the cohort
+    has already aged enough overall (see `_milestone_reached`). If
+    this symbol's own panel doesn't reach that far, it stopped trading
+    early — stale — and its last available close carries forward as
+    the exit price rather than dropping the symbol."""
+    t = _signal_row(panel, entry_date)
+    if t is None:
+        return None, False
+    entry_price = panel["open"].iloc[t + 1]
+    if pd.isna(entry_price) or entry_price <= 0:
+        return None, False
+    if t + h < len(panel):
+        exit_price = panel["close"].iloc[t + h]
+        if pd.notna(exit_price):
+            return float(exit_price / entry_price - 1), False
+    last_close = panel["close"].iloc[-1]
+    if pd.isna(last_close):
+        return None, False
+    return float(last_close / entry_price - 1), True
+
+
+def current_return(panel: pd.DataFrame, entry_date: str) -> float | None:
+    """Live mark-to-market return using the panel's latest close as an
+    undated exit — for the 'current' row that keeps drifting until a
+    fixed milestone freezes it. Never frozen, never stored."""
+    t = _signal_row(panel, entry_date)
+    if t is None:
+        return None
+    entry_price = panel["open"].iloc[t + 1]
+    if pd.isna(entry_price) or entry_price <= 0:
+        return None
+    last_close = panel["close"].iloc[-1]
+    if pd.isna(last_close):
+        return None
+    return float(last_close / entry_price - 1)
+
+
+def _signal_date(panels: dict[str, pd.DataFrame], entry_date: str
+                 ) -> pd.Timestamp | None:
+    dates = backtest.common_dates(panels)
+    pos = dates.searchsorted(pd.Timestamp(entry_date))
+    return dates[pos - 1] if pos > 0 else None
+
+
+def current_snapshot(cohort: dict, panels: dict[str, pd.DataFrame],
+                     cost_pct: float = backtest.DEFAULT_COST_PCT
+                     ) -> dict | None:
+    """Live mark-to-market view for the active-cohorts list — same
+    weighted-aggregate shape as a frozen milestone, but using each
+    symbol's latest close as an undated exit. None for a still-pending
+    cohort (no entry bar yet, nothing to mark)."""
+    if cohort["status"] == STATUS_PENDING or cohort["entry_date"] is None:
+        return None
+    weights = cohort["weights"]["by_symbol"]
+    per_symbol = {}
+    weighted_sum, weight_total = 0.0, 0.0
+    for sym in cohort["symbols"]:
+        panel = panels.get(sym)
+        ret = current_return(panel, cohort["entry_date"]) \
+            if panel is not None else None
+        per_symbol[sym] = {"return": round(ret, 4) if ret is not None else None}
+        if ret is not None:
+            w = weights.get(sym, 0.0)
+            weighted_sum += w * ret
+            weight_total += w
+    gross = weighted_sum / weight_total if weight_total > 0 else None
+    net = gross - cost_pct / 100 if gross is not None else None
+    return {"per_symbol": per_symbol,
+           "gross": round(gross, 4) if gross is not None else None,
+           "net": round(net, 4) if net is not None else None}
+
+
+# ------------------------------------------------------------ aggregation
+def _aggregate_milestone(panels: dict[str, pd.DataFrame], symbols: list[str],
+                         weights_by_symbol: dict[str, float],
+                         entry_date: str, h: int, cost_pct: float,
+                         baseline_h: pd.Series) -> dict | None:
+    """One horizon's frozen snapshot, or None if not reached yet."""
+    if not _milestone_reached(panels, entry_date, h):
+        return None
+
+    per_symbol, stale_count = {}, 0
+    weighted_sum, weight_total = 0.0, 0.0
+    for sym in symbols:
+        panel = panels.get(sym)
+        if panel is None:
+            per_symbol[sym] = {"return": None, "stale": True}
+            stale_count += 1
+            continue
+        ret, stale = _symbol_return(panel, entry_date, h)
+        per_symbol[sym] = {"return": round(ret, 4) if ret is not None else None,
+                          "stale": stale}
+        if stale:
+            stale_count += 1
+        if ret is not None:
+            w = weights_by_symbol.get(sym, 0.0)
+            weighted_sum += w * ret
+            weight_total += w
+
+    gross = weighted_sum / weight_total if weight_total > 0 else None
+    net = gross - cost_pct / 100 if gross is not None else None
+
+    sig_date = _signal_date(panels, entry_date)
+    b = baseline_h.get(sig_date) if sig_date is not None else None
+    b = float(b) if b is not None and pd.notna(b) else None
+    excess_gross = gross - b if gross is not None and b is not None else None
+    excess_net = net - b if net is not None and b is not None else None
+
+    return {
+        "per_symbol": per_symbol,
+        "n_symbols": len(symbols),
+        "n_stale": stale_count,
+        "gross": round(gross, 4) if gross is not None else None,
+        "net": round(net, 4) if net is not None else None,
+        "baseline": round(b, 4) if b is not None else None,
+        "excess_gross": round(excess_gross, 4) if excess_gross is not None else None,
+        "excess_net": round(excess_net, 4) if excess_net is not None else None,
+        "frozen_at": _dt.datetime.now().isoformat(timespec="seconds"),
+    }
+
+
+# ------------------------------------------------------------ lifecycle
+def refresh_cohort(cohort: dict, panels: dict[str, pd.DataFrame],
+                   min_turnover_cr: float,
+                   cost_pct: float = backtest.DEFAULT_COST_PCT) -> dict:
+    """Advance a cohort in place: resolve entry_date if still pending,
+    freeze any newly-reached milestone, complete at 60 bars. This IS
+    the "nightly refresh" — there's no separate cron state, milestones
+    are computed lazily from frozen dates whenever a cohort is read
+    (ROADMAP Item 16's explicit design), so viewing is refreshing."""
+    symbols = list(cohort["symbols"])
+
+    if cohort["status"] == STATUS_PENDING:
+        created = pd.Timestamp(cohort["created_ts"]).normalize()
+        entry_date = _next_trading_day(panels, symbols, created)
+        if entry_date is None:
+            return cohort
+        cohort["entry_date"] = entry_date
+        cohort["status"] = STATUS_ACTIVE
+
+    if cohort["status"] == STATUS_ACTIVE:
+        weights = cohort["weights"]["by_symbol"]
+        baseline = None
+        for h in HORIZONS:
+            key = str(h)
+            if cohort["milestones"].get(key) is not None:
+                continue
+            if baseline is None:  # computed at most once per refresh call
+                baseline = backtest.compute_baseline(
+                    panels, list(panels.keys()), HORIZONS, min_turnover_cr)
+            snap = _aggregate_milestone(
+                panels, symbols, weights, cohort["entry_date"], h,
+                cost_pct, baseline[h])
+            if snap is not None:
+                cohort["milestones"][key] = snap
+        if cohort["milestones"].get(str(HORIZONS[-1])) is not None:
+            cohort["status"] = STATUS_COMPLETED
+
+    return cohort
+
+
+def create_cohort(*, universe_id: str, spec: dict, symbols: list[str],
+                  weights: dict, notes: str = "",
+                  created_ts: str | None = None) -> dict:
+    """Freeze a new cohort. `spec` is re-validated defensively (same
+    discipline as backtest_spec) since a caller-supplied dict may not
+    have gone through dsl.validate yet. `created_ts` defaults to now —
+    the override exists for tests that need a cohort created 60+ real
+    trading days in the past to exercise milestone freezing without
+    waiting two months for real data to accumulate."""
+    spec = dsl.validate(spec)
+    if not symbols:
+        raise ValueError("a cohort needs at least one symbol")
+    cohort = {
+        "cohort_id": _uuid.uuid4().hex[:12],
+        "created_ts": created_ts or _dt.datetime.now().isoformat(
+            timespec="seconds"),
+        "universe": universe_id,
+        "spec": spec,
+        "spec_hash": dsl.spec_hash(spec),
+        "symbols": list(symbols),
+        "weights": weights,
+        "entry_date": None,
+        "status": STATUS_PENDING,
+        "notes": notes,
+        "milestones": {str(h): None for h in HORIZONS},
+    }
+    cohorts = _load_all(universe_id)
+    cohorts.append(cohort)
+    _save_all(universe_id, cohorts)
+    return cohort
+
+
+def list_cohorts(universe_id: str, panels: dict[str, pd.DataFrame],
+                 min_turnover_cr: float, spec_hash: str | None = None
+                 ) -> list[dict]:
+    """Every cohort for this universe, refreshed against current data
+    (lazy — see `refresh_cohort`) before returning. Persists any
+    lifecycle change (pending->active, a newly-frozen milestone,
+    active->completed) so the next read doesn't recompute it."""
+    cohorts = _load_all(universe_id)
+    changed = False
+    for c in cohorts:
+        before = _json.dumps(c, sort_keys=True)
+        refresh_cohort(c, panels, min_turnover_cr)
+        if _json.dumps(c, sort_keys=True) != before:
+            changed = True
+    if changed:
+        _save_all(universe_id, cohorts)
+    if spec_hash:
+        cohorts = [c for c in cohorts if c["spec_hash"] == spec_hash]
+    return cohorts
+
+
+def get_cohort(universe_id: str, cohort_id: str,
+               panels: dict[str, pd.DataFrame], min_turnover_cr: float
+               ) -> dict | None:
+    for c in list_cohorts(universe_id, panels, min_turnover_cr):
+        if c["cohort_id"] == cohort_id:
+            return c
+    return None
+
+
+# ------------------------------------------------------------ scorecard
+def scorecard(universe_id: str, spec_hash: str,
+             panels: dict[str, pd.DataFrame], min_turnover_cr: float,
+             backtest_log_entries: list[dict] | None = None) -> dict:
+    """Per-spec IS-vs-OOS scorecard: this spec's cohorts aggregated per
+    horizon, side by side with the most recent logged backtest run for
+    the same spec_hash (if any). <20 total tracked names at a horizon
+    suppresses the mean — evidence accumulation, not hypothesis
+    testing, and the scorecard says so rather than printing a number
+    that looks more confident than the sample supports."""
+    cohorts = list_cohorts(universe_id, panels, min_turnover_cr,
+                           spec_hash=spec_hash)
+    per_horizon = {}
+    for h in HORIZONS:
+        key = str(h)
+        snaps = [c["milestones"][key] for c in cohorts
+                if c["milestones"].get(key) is not None]
+        n_names = sum(s["n_symbols"] for s in snaps)
+        excess_vals = [s["excess_net"] for s in snaps
+                      if s["excess_net"] is not None]
+        if n_names < MIN_SCORECARD_NAMES or not excess_vals:
+            per_horizon[key] = {
+                "n_cohorts": len(snaps), "n_names": n_names,
+                "insufficient": True, "mean_excess_net": None,
+                "median_excess_net": None, "hit_rate": None,
+            }
+            continue
+        arr = np.array(excess_vals)
+        per_horizon[key] = {
+            "n_cohorts": len(snaps), "n_names": n_names,
+            "insufficient": False,
+            "mean_excess_net": round(float(arr.mean()), 4),
+            "median_excess_net": round(float(np.median(arr)), 4),
+            "hit_rate": round(float((arr > 0).mean()), 4),
+        }
+
+    in_sample = None
+    if backtest_log_entries:
+        # spec_hash alone isn't enough: the same spec can legitimately
+        # run on more than one universe, and pairing an OOS cohort with
+        # an IS backtest from a DIFFERENT universe would silently
+        # compare apples to oranges.
+        matches = [e for e in backtest_log_entries
+                  if e.get("spec_hash") == spec_hash
+                  and e.get("universe") == universe_id]
+        if matches:
+            in_sample = matches[-1].get("horizons")
+
+    return {
+        "spec_hash": spec_hash,
+        "n_cohorts_total": len(cohorts),
+        "horizons": per_horizon,
+        "in_sample": in_sample,
+        "footnote": "IS is survivorship-flattered; OOS is small-sample.",
+        "survivorship_free_note": SURVIVORSHIP_FREE_NOTE,
+    }

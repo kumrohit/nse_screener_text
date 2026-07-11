@@ -154,6 +154,22 @@ simulator (no sizing, no compounding, no stops). See
 [TECHNICAL_DESIGN.md §12f](TECHNICAL_DESIGN.md) for the full
 methodology and the measured performance characteristics.
 
+**📈 Track these matches** (results view) or **📈 track this portfolio**
+(after allocating) freezes the current set as a **cohort** and follows it
+forward — the out-of-sample complement to the backtest above, at the
+identical horizons/baseline/entry convention, so the two numbers are
+directly comparable. Nothing is ever dropped: a symbol that later
+delists or gets suspended is flagged stale and carries its last close
+forward instead of quietly exiting the sample, which is the one bias a
+backtest can't remove and a forward tracker can. The **📈 cohorts** panel
+lists every tracked cohort (age, current return, next milestone due),
+opens into a per-symbol detail table (click a symbol for its full chart
+with the entry date marked), and links to a **scorecard** — in-sample
+(backtest) vs. out-of-sample (cohorts) side by side per horizon, with
+the mean suppressed below 20 tracked names rather than shown with false
+confidence. See [TECHNICAL_DESIGN.md §12h](TECHNICAL_DESIGN.md) for the
+full methodology.
+
 With no price store yet, the app boots into a labelled 11-stock demo
 universe so everything above is explorable immediately after clone.
 
@@ -203,6 +219,14 @@ python -m screener.cli screen --json '{"logic":"AND","conditions":[
 python -m screener.cli backtest "taking support at 50 EMA and in an uptrend" \
   --hypothesis "expect modest positive 20-bar excess, pullback-continuation setup"
 python -m screener.cli backtest --preset flat_base_52w --horizons 5 20 60 --no-sensitivity
+
+# cohort tracker: freeze today's matches and follow them forward, out of
+# sample — the walk-forward complement to backtest above
+python -m screener.cli screen --preset flat_base_52w   # run it once so it's logged
+python -m screener.cli cohort create --from-last-screen --notes "flat base seed"
+python -m screener.cli cohort list                      # every tracked cohort, age + status
+python -m screener.cli cohort show <cohort_id>           # per-symbol table, frozen milestones
+python -m screener.cli scorecard flat_base_52w            # IS (backtest) vs OOS (cohorts), by horizon
 
 # other universes: backfill once, then screen/backtest like any other
 python -m screener.cli backfill --universe nse_full     # ~15 min, 2,047 symbols
@@ -261,12 +285,14 @@ Unknown keys are flagged and ignored rather than silently doing nothing. The eff
 ## Tests
 
 ```bash
-python -m pytest tests/                    # 252 tests: synthetic series with known answers,
+python -m pytest tests/                    # 283 tests: synthetic series with known answers,
                                            # evidence-layer agreement, web API contract,
                                            # allocation-engine invariants, backtester
                                            # methodology (event dedup, entry convention,
                                            # baseline, costs, bootstrap, vectorizer
-                                           # consistency), universe registry
+                                           # consistency), universe registry, cohort
+                                           # tracker (adjustment invariance, milestone
+                                           # freezing, baseline parity, scorecard)
 cd web/visual && npm test                  # visual regression: 6 baseline screenshots
                                            # against a live demo-mode server (see below)
 python -m tests.golden_harness             # live parser scoring vs 23 hand-verified queries

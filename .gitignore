@@ -8,6 +8,7 @@ data/config_local.toml
 # per-universe stores (ROADMAP Item 15 Phase A: data/{universe_id}/…)
 data/*/*.parquet
 data/*/*.csv
+data/*/*.jsonl
 
 # python
 __pycache__/

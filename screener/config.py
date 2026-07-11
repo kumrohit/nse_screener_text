@@ -50,6 +50,14 @@ def benchmark_store(universe_id: str = DEFAULT_UNIVERSE) -> Path:
            else universe_dir(universe_id) / "benchmark.parquet")
 
 
+def cohorts_file(universe_id: str = DEFAULT_UNIVERSE) -> Path:
+    """ROADMAP Item 16 — one cohort-tracker store per universe, same
+    per-universe-directory convention as the price/universe/benchmark
+    stores above (no legacy flat-`data/` layout to migrate here, this
+    file never existed before the registry did)."""
+    return universe_dir(universe_id) / "cohorts.jsonl"
+
+
 # Kept as plain attributes (not just the functions above) so existing
 # `monkeypatch.setattr(config, "PRICE_STORE", ...)`-style test fixtures
 # keep working unchanged — the functions defer to these for the default

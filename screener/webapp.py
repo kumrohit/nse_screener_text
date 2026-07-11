@@ -40,8 +40,8 @@ from fastapi import FastAPI
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 
-from . import (allocate, backtest, config, dsl, evaluator, explain,
-              indicators, universes)
+from . import (allocate, backtest, cohorts as cohorts_mod, config, dsl,
+              evaluator, explain, indicators, universes)
 
 app = FastAPI(title="NSE Text Screener")
 
@@ -502,12 +502,18 @@ class BacktestIn(BaseModel):
 BACKTEST_LOG_FILE = config.DATA_DIR / "backtest_log.jsonl"
 
 
-def _log_backtest(body: "BacktestIn", result: dict) -> None:
+def _log_backtest(body: "BacktestIn", result: dict,
+                  universe_id: str = universes.DEFAULT_UNIVERSE) -> None:
     """Same replay-guarantee spirit as screen_log.jsonl/allocation_log.jsonl
     (ROADMAP Items 5/10): spec hash + every run parameter + hypothesis +
     the per-horizon summary (not the full per-event table — that alone
     can be thousands of rows; the summary is enough to see what a run
-    concluded, and screen_log already has the spec's match history)."""
+    concluded, and screen_log already has the spec's match history).
+    `universe_id` (ROADMAP Item 16) matters here specifically: the
+    cohort scorecard looks up the most recent backtest for a spec_hash
+    as its in-sample comparison, and the same spec_hash can legitimately
+    run on more than one universe — without this field that lookup
+    could silently pair an nse_full cohort with a nifty500 backtest."""
     import json as _json
     import datetime as _dt
     try:
@@ -516,6 +522,7 @@ def _log_backtest(body: "BacktestIn", result: dict) -> None:
             fh.write(_json.dumps({
                 "ts": _dt.datetime.now().isoformat(timespec="seconds"),
                 "spec_hash": result["spec_hash"], "english": result["english"],
+                "universe": universe_id,
                 "hypothesis": body.hypothesis, "cooldown": body.cooldown,
                 "cost_pct": body.cost_pct,
                 "min_turnover_cr": body.min_turnover_cr,
@@ -559,8 +566,93 @@ def backtest_endpoint(body: BacktestIn):
     result["mode"] = st["mode"]
     sector_warning = evaluator.sector_data_gap_warning(spec, st["universe"])
     result["warnings"] = [sector_warning] if sector_warning else []
-    _log_backtest(body, result)
+    _log_backtest(body, result, st["universe_id"])
     return result
+
+
+class CohortCreateIn(BaseModel):
+    spec: dict
+    symbols: list[str] | None = None    # "track these matches" (equal weight)
+    positions: list[dict] | None = None  # "track this portfolio" (allocate()
+                                         # positions — each needs symbol+value)
+    method: str = "equal"                # display label; ignored if symbols given
+    notes: str = ""
+
+
+def _attach_current(cohort: dict, panels: dict) -> dict:
+    """A response-shaping helper, not a stored field: `current` is
+    recomputed fresh on every read (never frozen, never persisted) —
+    see cohorts.current_snapshot's docstring."""
+    out = dict(cohort)
+    out["current"] = cohorts_mod.current_snapshot(cohort, panels)
+    return out
+
+
+@app.post("/api/cohorts")
+def create_cohort_endpoint(body: CohortCreateIn):
+    """Freeze a cohort of matches (or a sized allocation) for
+    walk-forward out-of-sample tracking (ROADMAP Item 16) — the
+    complement to the backtester's in-sample event study. See
+    screener/cohorts.py's module docstring for the full methodology
+    (entry convention, milestone freezing, survivorship-free-by-
+    construction, IS-vs-OOS scorecard)."""
+    try:
+        spec = dsl.validate(body.spec)
+    except dsl.DSLValidationError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=422)
+    if bool(body.symbols) == bool(body.positions):
+        return JSONResponse(
+            {"error": "provide exactly one of symbols or positions"},
+            status_code=422)
+    try:
+        if body.positions:
+            weights = cohorts_mod.weights_from_positions(
+                body.positions, body.method)
+            symbols = [p["symbol"] for p in body.positions]
+        else:
+            weights = cohorts_mod.weights_from_symbols(body.symbols)
+            symbols = body.symbols
+        cohort = cohorts_mod.create_cohort(
+            universe_id=_ACTIVE_UNIVERSE, spec=spec, symbols=symbols,
+            weights=weights, notes=body.notes)
+    except (ValueError, dsl.DSLValidationError, KeyError) as exc:
+        return JSONResponse({"error": str(exc)}, status_code=422)
+    return cohort
+
+
+@app.get("/api/cohorts")
+def list_cohorts_endpoint(spec_hash: str | None = None):
+    st = _load_state(_ACTIVE_UNIVERSE)
+    cohorts_list = cohorts_mod.list_cohorts(
+        _ACTIVE_UNIVERSE, st["panels"],
+        config.liquidity_gate_cr(_ACTIVE_UNIVERSE), spec_hash=spec_hash)
+    return [_attach_current(c, st["panels"]) for c in cohorts_list]
+
+
+@app.get("/api/cohorts/{cohort_id}")
+def get_cohort_endpoint(cohort_id: str):
+    st = _load_state(_ACTIVE_UNIVERSE)
+    cohort = cohorts_mod.get_cohort(
+        _ACTIVE_UNIVERSE, cohort_id, st["panels"],
+        config.liquidity_gate_cr(_ACTIVE_UNIVERSE))
+    if cohort is None:
+        return JSONResponse({"error": "not found"}, status_code=404)
+    return _attach_current(cohort, st["panels"])
+
+
+@app.get("/api/scorecard/{spec_hash}")
+def scorecard_endpoint(spec_hash: str):
+    st = _load_state(_ACTIVE_UNIVERSE)
+    log_entries = []
+    if BACKTEST_LOG_FILE.exists():
+        import json as _json
+        log_entries = [_json.loads(l) for l in
+                       BACKTEST_LOG_FILE.read_text().strip().splitlines()
+                       if l]
+    return cohorts_mod.scorecard(
+        _ACTIVE_UNIVERSE, spec_hash, st["panels"],
+        config.liquidity_gate_cr(_ACTIVE_UNIVERSE),
+        backtest_log_entries=log_entries)
 
 
 @app.post("/api/chart")

@@ -996,13 +996,14 @@ class TestAsOfAndSpark:
         assert any("support" in m["spark"]["levels"]
                    for m in j2["matches"])
 
-    def test_screen_log_written(self):
+    def test_screen_log_written(self, monkeypatch, tmp_path):
         from screener import webapp
-        before = (webapp.LOG_FILE.read_text().count("\n")
-                  if webapp.LOG_FILE.exists() else 0)
+        log = tmp_path / "screen_log.jsonl"
+        monkeypatch.setattr(webapp, "LOG_FILE", log)
+        before = log.read_text().count("\n") if log.exists() else 0
         self.client.post("/api/screen", json={"spec": {
             "conditions": [{"type": "trend", "direction": "up"}]}})
-        after = webapp.LOG_FILE.read_text().count("\n")
+        after = log.read_text().count("\n")
         assert after == before + 1
         r = self.client.get("/api/log")
         assert r.status_code == 200 and r.json()[0]["matched"]
@@ -1132,6 +1133,106 @@ class TestBacktestEndpoint:
         assert entry["spec_hash"] and entry["hypothesis"] == \
             "expect positive drift continuation"
         assert "horizons" in entry and "n_events_total" in entry
+        assert entry["universe"] == "nifty500"
+
+
+class TestCohortEndpoints:
+    """ROADMAP Item 16: cohort tracker, API contract. Demo panels end
+    "today", so a freshly-created cohort correctly stays pending (no
+    bar exists after today yet) — full lifecycle progression is
+    covered at the unit level in tests/test_cohorts.py; this class
+    tests the HTTP contract these endpoints must honour."""
+    client = TestClient(app)
+    SPEC = {"conditions": [{"type": "trend", "direction": "up"}]}
+
+    def test_create_from_symbols_starts_pending(self, tmp_path, monkeypatch):
+        from screener import config
+        monkeypatch.setattr(config, "DATA_DIR", tmp_path)
+        r = self.client.post("/api/cohorts", json={
+            "spec": self.SPEC, "symbols": ["STEADY", "PULLBK"]})
+        assert r.status_code == 200
+        j = r.json()
+        assert j["status"] == "pending" and j["entry_date"] is None
+        assert j["weights"]["method"] == "equal"
+        assert set(j["weights"]["by_symbol"]) == {"STEADY", "PULLBK"}
+
+    def test_create_from_positions_uses_allocation_weights(self, tmp_path,
+                                                            monkeypatch):
+        from screener import config
+        monkeypatch.setattr(config, "DATA_DIR", tmp_path)
+        r = self.client.post("/api/cohorts", json={
+            "spec": self.SPEC, "method": "risk",
+            "positions": [{"symbol": "STEADY", "value": 30000},
+                         {"symbol": "PULLBK", "value": 10000}]})
+        assert r.status_code == 200
+        j = r.json()
+        assert j["weights"]["method"] == "risk"
+        assert j["weights"]["by_symbol"]["STEADY"] == pytest.approx(0.75)
+
+    def test_create_requires_exactly_one_of_symbols_or_positions(self):
+        r = self.client.post("/api/cohorts", json={"spec": self.SPEC})
+        assert r.status_code == 422
+        r2 = self.client.post("/api/cohorts", json={
+            "spec": self.SPEC, "symbols": ["STEADY"],
+            "positions": [{"symbol": "STEADY", "value": 1}]})
+        assert r2.status_code == 422
+
+    def test_create_invalid_spec_422s(self):
+        r = self.client.post("/api/cohorts", json={
+            "spec": {"conditions": []}, "symbols": ["STEADY"]})
+        assert r.status_code == 422
+
+    def test_list_and_get_roundtrip(self, tmp_path, monkeypatch):
+        from screener import config
+        monkeypatch.setattr(config, "DATA_DIR", tmp_path)
+        created = self.client.post("/api/cohorts", json={
+            "spec": self.SPEC, "symbols": ["STEADY"]}).json()
+
+        lst = self.client.get("/api/cohorts").json()
+        assert any(c["cohort_id"] == created["cohort_id"] for c in lst)
+        assert all("current" in c for c in lst)  # always attached, may be None
+
+        got = self.client.get(f"/api/cohorts/{created['cohort_id']}")
+        assert got.status_code == 200
+        assert got.json()["cohort_id"] == created["cohort_id"]
+
+    def test_get_unknown_cohort_404s(self, tmp_path, monkeypatch):
+        from screener import config
+        monkeypatch.setattr(config, "DATA_DIR", tmp_path)
+        r = self.client.get("/api/cohorts/doesnotexist")
+        assert r.status_code == 404
+
+    def test_list_filters_by_spec_hash(self, tmp_path, monkeypatch):
+        from screener import config, dsl
+        monkeypatch.setattr(config, "DATA_DIR", tmp_path)
+        self.client.post("/api/cohorts", json={
+            "spec": self.SPEC, "symbols": ["STEADY"]})
+        other_spec = {"conditions": [{"type": "range", "field": "rsi",
+                                     "min": 0, "max": 100}]}
+        self.client.post("/api/cohorts", json={
+            "spec": other_spec, "symbols": ["PULLBK"]})
+
+        target_hash = dsl.spec_hash(dsl.validate(self.SPEC))
+        lst = self.client.get(
+            f"/api/cohorts?spec_hash={target_hash}").json()
+        assert len(lst) == 1
+        assert lst[0]["spec_hash"] == target_hash
+
+    def test_scorecard_shape_and_suppression(self, tmp_path, monkeypatch):
+        from screener import config, dsl
+        monkeypatch.setattr(config, "DATA_DIR", tmp_path)
+        self.client.post("/api/cohorts", json={
+            "spec": self.SPEC, "symbols": ["STEADY"]})
+        target_hash = dsl.spec_hash(dsl.validate(self.SPEC))
+        r = self.client.get(f"/api/scorecard/{target_hash}")
+        assert r.status_code == 200
+        j = r.json()
+        assert j["spec_hash"] == target_hash
+        assert j["n_cohorts_total"] == 1
+        for h in ("5", "20", "60"):
+            assert j["horizons"][h]["insufficient"] is True
+        assert "survivorship_free_note" in j and \
+            "survivorship-free" in j["survivorship_free_note"].lower()
 
 
 class TestSectorDataGapWarningEndpoints:

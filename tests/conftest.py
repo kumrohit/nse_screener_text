@@ -24,3 +24,18 @@ def _force_demo_mode():
         webapp._state.clear()
         yield
     webapp._state.clear()
+
+
+@pytest.fixture(autouse=True)
+def _isolate_webapp_log_files(tmp_path, monkeypatch):
+    """webapp's log/store constants (LOG_FILE, BACKTEST_LOG_FILE, ...) are
+    bound once at import time from the real config.DATA_DIR, so patching
+    config.DATA_DIR in an individual test does NOT redirect them — every
+    /api/screen, /api/backtest etc. call in a test run was silently
+    appending demo-data entries to the real data/ store. Point every one
+    at this test's own tmp_path by default; tests that need a specific
+    path can still monkeypatch over this within the test as before."""
+    for name in ("LOG_FILE", "ROTATED_LOG_FILE", "ALLOCATION_LOG_FILE",
+                "BACKTEST_LOG_FILE", "WATCHLIST_FILE", "USER_PRESETS_FILE"):
+        monkeypatch.setattr(webapp, name, tmp_path / name.lower(),
+                            raising=False)
