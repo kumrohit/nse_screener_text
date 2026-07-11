@@ -11,6 +11,8 @@
   <header>
     <h1><span class="tick">▮</span> NSE TEXT SCREENER</h1>
     <select id="universeSel" style="display:none;min-width:0" onchange="switchUniverse()" title="active screening universe" aria-label="active screening universe"></select>
+    <button class="btnsm" id="btnReset" onclick="resetAll()" type="button"
+      title="clear the view — inputs, results, panels. Does not touch saved data (watchlist, cohorts, my screens, logs)">↺ reset</button>
     <div class="status" id="status">connecting…</div>
   </header>
 

@@ -111,6 +111,44 @@ async function removeFromWatchlist(id){
 // A single reused element (aria-live="polite" so screen readers
 // announce it without stealing focus) rather than stacking multiple —
 // these are brief confirmations, not a notification center.
+// ---------------------------------------------------------------- reset
+// View reset only: returns the page to its initial state. Deliberately
+// does NOT delete persisted data (watchlist, cohorts, saved screens,
+// screen log) — destructive actions need their own confirmed flows.
+function resetAll(){
+  // inputs & spec state
+  $("qEn").value=""; $("qJs").value=""; spec=null;
+  $("asOf").value=""; $("presetSel").value="";
+  $("pdesc").style.display="none"; $("pdesc").innerHTML="";
+  setTab("en");                       // default tab; disables Run via setTab
+  err("");
+  // interpretation
+  $("interp").style.display="none";
+  $("english").textContent=""; $("specPre").textContent="";
+  $("assumptions").innerHTML="";
+  const w=$("screenWarnings"); w.style.display="none"; w.innerHTML="";
+  // stats strip + attached panels
+  $("stats").style.display="none"; $("cells").innerHTML="";
+  [["diffBox",null],["allocatePanel","btnAllocate|💰 allocate"],
+   ["backtestPanel","btnBacktest|🧪 backtest"]].forEach(([id,btn])=>{
+    const el=$(id); el.style.display="none"; el.innerHTML="";
+    if(btn){const [b,label]=btn.split("|"); $(b).textContent=label;}
+  });
+  // results & footer
+  $("results").innerHTML=""; $("foot").innerHTML="";
+  // collapsible panels + their toggle labels
+  [["recentPanel","btnRecent","recent screens"],
+   ["myScreensPanel","btnMyScreens","manage my screens"],
+   ["dashboardPanel","btnDashboard","📊 dashboard"],
+   ["watchlistPanel","btnWatchlist","☆ watchlist"]].forEach(([p,b,label])=>{
+    $(p).style.display="none"; $(p).innerHTML=""; $(b).textContent=label;
+  });
+  // chart modal, if open
+  if(typeof closeChartModal==="function") closeChartModal();
+  window.scrollTo({top:0,behavior:"smooth"});
+  toast("view reset — saved data untouched");
+}
+
 function toast(msg){
   let t=document.getElementById("toast");
   if(!t){

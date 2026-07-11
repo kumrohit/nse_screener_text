@@ -1893,3 +1893,20 @@ class TestNewStrategyPresets:
         res = run_screen(panels, spec, universe=uni)
         assert "STAGE2" in set(res["symbol"])
         assert "SIDEWAYS" not in set(res["symbol"])
+
+
+class TestResetButton:
+    client = TestClient(app)
+
+    def test_reset_button_and_function_served(self):
+        html = self.client.get("/").text
+        assert 'id="btnReset"' in html and "resetAll()" in html
+        js = self.client.get("/app.js").text
+        assert "function resetAll()" in js
+        # the reset must restore every toggle label it clears
+        for label in ("recent screens", "manage my screens",
+                      "📊 dashboard", "☆ watchlist"):
+            assert label in js
+        # and must not touch persisted stores
+        assert "watchlist.jsonl" not in js.split("function resetAll()")[1] \
+            .split("function toast")[0]
