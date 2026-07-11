@@ -1233,6 +1233,136 @@ class TestCohortEndpoints:
             assert j["horizons"][h]["insufficient"] is True
         assert "survivorship_free_note" in j and \
             "survivorship-free" in j["survivorship_free_note"].lower()
+        assert "replay" in j and j["replay"]["n_cohorts"] == 0
+
+
+class TestCohortReplayAndPerformanceEndpoints:
+    """ROADMAP Item 17: replay-mode creation and the performance panel.
+    Demo panels run 2024-03-25 -> 2026-07-10 (600 bars), so an as_of
+    ~100 bars back leaves plenty of later data for a replay window."""
+    client = TestClient(app)
+    SPEC = {"conditions": [{"type": "trend", "direction": "up"}]}
+
+    def test_create_with_as_of_is_replay_mode(self, tmp_path, monkeypatch):
+        from screener import config, demo
+        monkeypatch.setattr(config, "DATA_DIR", tmp_path)
+        panels, *_ = demo.build_demo()
+        as_of = str(panels["STEADY"].index[-100].date())
+        r = self.client.post("/api/cohorts", json={
+            "spec": self.SPEC, "symbols": ["STEADY", "PULLBK"],
+            "as_of": as_of})
+        assert r.status_code == 200
+        j = r.json()
+        assert j["mode"] == "replay"
+        assert j["as_of"] is not None
+        # creation itself doesn't refresh (lazy, on-read, by design) —
+        # the next GET resolves entry immediately since as_of is already
+        # historical, unlike a forward cohort which waits on real time.
+        got = self.client.get(f"/api/cohorts/{j['cohort_id']}").json()
+        assert got["status"] != "pending"
+
+    def test_create_as_of_with_no_later_bar_422s(self, tmp_path,
+                                                 monkeypatch):
+        from screener import config, demo
+        monkeypatch.setattr(config, "DATA_DIR", tmp_path)
+        panels, *_ = demo.build_demo()
+        latest = str(panels["STEADY"].index[-1].date())
+        r = self.client.post("/api/cohorts", json={
+            "spec": self.SPEC, "symbols": ["STEADY"], "as_of": latest})
+        assert r.status_code == 422
+
+    def test_replay_cohort_carries_survivorship_note_on_read(
+            self, tmp_path, monkeypatch):
+        from screener import config, cohorts as cohorts_mod, demo
+        monkeypatch.setattr(config, "DATA_DIR", tmp_path)
+        panels, *_ = demo.build_demo()
+        as_of = str(panels["STEADY"].index[-100].date())
+        created = self.client.post("/api/cohorts", json={
+            "spec": self.SPEC, "symbols": ["STEADY"],
+            "as_of": as_of}).json()
+        got = self.client.get(f"/api/cohorts/{created['cohort_id']}").json()
+        assert got["survivorship_note"] == \
+            cohorts_mod.REPLAY_SURVIVORSHIP_NOTE
+        # a forward cohort never gets this field attached
+        fwd = self.client.post("/api/cohorts", json={
+            "spec": self.SPEC, "symbols": ["PULLBK"]}).json()
+        got_fwd = self.client.get(f"/api/cohorts/{fwd['cohort_id']}").json()
+        assert "survivorship_note" not in got_fwd
+
+    def test_no_as_of_still_forward_mode(self, tmp_path, monkeypatch):
+        from screener import config
+        monkeypatch.setattr(config, "DATA_DIR", tmp_path)
+        r = self.client.post("/api/cohorts", json={
+            "spec": self.SPEC, "symbols": ["STEADY"]})
+        assert r.json()["mode"] == "forward"
+
+    def test_performance_endpoint_shape_for_replay_cohort(
+            self, tmp_path, monkeypatch):
+        from screener import config, demo
+        monkeypatch.setattr(config, "DATA_DIR", tmp_path)
+        panels, *_ = demo.build_demo()
+        as_of = str(panels["STEADY"].index[-100].date())
+        created = self.client.post("/api/cohorts", json={
+            "spec": self.SPEC, "symbols": ["STEADY", "PULLBK"],
+            "as_of": as_of}).json()
+        r = self.client.get(
+            f"/api/cohorts/{created['cohort_id']}/performance")
+        assert r.status_code == 200
+        j = r.json()
+        for key in ("gross", "net", "excess_gross_baseline", "sharpe",
+                   "max_drawdown", "contributors", "per_symbol",
+                   "equity_curve"):
+            assert key in j
+        assert j["equity_curve"]["dates"][0] == j["entry_date"]
+
+    def test_performance_endpoint_404_unknown_cohort(self, tmp_path,
+                                                      monkeypatch):
+        from screener import config
+        monkeypatch.setattr(config, "DATA_DIR", tmp_path)
+        r = self.client.get("/api/cohorts/doesnotexist/performance")
+        assert r.status_code == 404
+
+    def test_performance_endpoint_422_while_pending(self, tmp_path,
+                                                     monkeypatch):
+        from screener import config
+        monkeypatch.setattr(config, "DATA_DIR", tmp_path)
+        # demo panels end "today" — a freshly-created forward cohort has
+        # no bar after today yet, so it stays pending with no window.
+        created = self.client.post("/api/cohorts", json={
+            "spec": self.SPEC, "symbols": ["STEADY"]}).json()
+        r = self.client.get(
+            f"/api/cohorts/{created['cohort_id']}/performance")
+        assert r.status_code == 422
+
+    def test_performance_endpoint_end_param(self, tmp_path, monkeypatch):
+        from screener import config, demo
+        monkeypatch.setattr(config, "DATA_DIR", tmp_path)
+        panels, *_ = demo.build_demo()
+        as_of = str(panels["STEADY"].index[-100].date())
+        created = self.client.post("/api/cohorts", json={
+            "spec": self.SPEC, "symbols": ["STEADY"],
+            "as_of": as_of}).json()
+        mid_end = str(panels["STEADY"].index[-50].date())
+        r = self.client.get(
+            f"/api/cohorts/{created['cohort_id']}/performance",
+            params={"end": mid_end})
+        assert r.status_code == 200
+        assert r.json()["end_date"] == mid_end
+
+    def test_scorecard_replay_block_walled_off(self, tmp_path,
+                                               monkeypatch):
+        from screener import config, demo, dsl
+        monkeypatch.setattr(config, "DATA_DIR", tmp_path)
+        panels, *_ = demo.build_demo()
+        as_of = str(panels["STEADY"].index[-100].date())
+        self.client.post("/api/cohorts", json={
+            "spec": self.SPEC, "symbols": ["STEADY"], "as_of": as_of})
+        target_hash = dsl.spec_hash(dsl.validate(self.SPEC))
+        r = self.client.get(f"/api/scorecard/{target_hash}")
+        j = r.json()
+        assert j["n_cohorts_total"] == 0  # the only cohort is replay-mode
+        assert j["replay"]["n_cohorts"] == 1
+        assert "NOT part of the OOS scorecard" in j["replay"]["label"]
 
 
 class TestSectorDataGapWarningEndpoints:

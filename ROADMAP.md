@@ -5,7 +5,45 @@ commits that complete them; anything descoped gets struck through with a
 one-line reason, not silently deleted. Design rationale lives in
 TECHNICAL_DESIGN.md; this file is the *what and in which order*.
 
-Status snapshot: v0.14 — **Item 16 (cohort tracker, walk-forward
+Status snapshot: v0.15 — **Item 17 (cohort replay & performance
+engine) complete** 2026-07-11 — a cohort can now be created as of ANY
+historical date (`as_of`, resolved leniently to the trading day at or
+before it, validated to leave ≥1 later bar) instead of only "starting
+now," and every cohort — replay or forward — gets a full performance
+panel (`screener/cohort_perf.py`, pure functions, no code duplicated
+from Item 16's baseline/entry-convention machinery): cumulative
+return gross/net, excess vs. the same-entry-date universe baseline
+and vs. Nifty, annualised vol, max drawdown with peak/trough dates
+(cohort-level AND per-symbol), hit rates, weighted contributors, and
+an equity curve (cohort/baseline/Nifty, indexed to 100 at entry) for
+an arbitrary window (`end_date`, clamped to the latest bar, resolved
+leniently on non-trading days) — Sharpe reported only ≥60 bars, an
+honest "window too short" otherwise. The integrity wall is the
+headline: a replay cohort (any explicit `as_of`) is in-sample by
+construction — mode is derived server-side, not a field a caller can
+set — and is walled out of the OOS scorecard into its own
+clearly-labelled block, verified by a dedicated test. Three surfaces:
+UI ("track these matches"/"track this portfolio" now thread the
+screen's own as-of date through automatically, so replaying is the
+natural result of tracking an as-of screen — no separate control
+needed; a Cohorts detail view gained a REPLAY badge, an equity-curve
+chart, the metrics panel, and an evaluate-to date control), CLI
+(`cohort create --as-of`, `cohort perf <id> [--end]`), and API
+(`as_of` on `POST /api/cohorts`, `GET /api/cohorts/{id}/performance`).
+33 new tests (21 core + 8 API + 4 follow-up), 313 total, all green.
+One real bug caught via live Playwright testing, not unit tests: the
+initial (default-window) performance fetch and a later
+"evaluate-to-a-different-date" fetch could race, and the slower one —
+whichever it was — would land last and silently overwrite the newer
+result; fixed by capturing the requested end-date at fetch-start and
+discarding the response if it no longer matches current UI state
+before applying it. Two gaps found via post-implementation spec review
+before shipping (own max-drawdown and weighted contribution were
+missing from the per-symbol row; the survivorship note was defined but
+never actually attached to any API/CLI/UI surface) — both closed and
+covered by new tests rather than left as silent scope-narrowing.
+
+**v0.14** — **Item 16 (cohort tracker, walk-forward
 out-of-sample filter validation) complete** 2026-07-11 —
 `screener/cohorts.py` freezes a cohort of matches (or a sized
 allocation) at signal time and tracks it forward at the exact same
@@ -103,7 +141,7 @@ for both larger universes simultaneously, vs. a 4 GB target) — no
 on-demand/LRU rearchitecture needed. A universe with no sector/industry
 data (nse_full, nse_etf) now warns loudly on a sector-based screen
 instead of silently returning zero matches, and the preset dropdown
-filters itself to what's applicable on the active universe. 283 tests
+filters itself to what's applicable on the active universe. 313 tests
 green, no known failures — `tests/conftest.py` makes the suite hermetic
 (forces demo mode, and isolates every webapp log/store file to a
 per-test tmp path, so it passes identically in CI and on a dev machine
@@ -112,8 +150,9 @@ Next up: breadth fields + the universe comparison (Session 2 of the
 2026-07-11 sequencing block, below), point-in-time index membership
 (Item 15 Phase B, gated on data-source archaeology), the deferred
 sidebar layout restructure, the preset evidence loop-closure (Item
-14's own follow-on, now also fed by Item 16's OOS scorecards), or
-Item 3's bhavcopy cutover once its evidence window closes.
+14's own follow-on, now also fed by Items 16/17's OOS/replay
+scorecards), or Item 3's bhavcopy cutover once its evidence window
+closes.
 
 ---
 
@@ -151,10 +190,10 @@ clean: config flip, yfinance to fallback, `delivery` condition +
 accumulation preset, risk log. Delivery-based presets get cohort-seeded
 the same day (their OOS clock starts latest, so no reason to add delay).
 
-**AFTER:** Item 17 (cohort replay + performance engine — buildable any
-session, pairs naturally with seeded cohorts since forward cohorts get
-the same metrics panel); Item 15-B membership build (scope per
-archaeology); v0.11 sidebar anytime; first cohort scorecard review
+**AFTER:** Item 17 — DONE 2026-07-11 (cohort replay + performance
+engine; forward cohorts got the same metrics panel with zero
+migration, as designed). Remaining: Item 15-B membership build (scope
+per archaeology); v0.11 sidebar anytime; first cohort scorecard review
 ~2 weeks after seeding.
 
 ---
@@ -1100,7 +1139,7 @@ helper) — this is an extension, not a fork.
 
 ### Integrity wall (the non-negotiable)
 
-- [ ] **`mode: "forward" | "replay"`** on every cohort. Replay = any
+- [x] **`mode: "forward" | "replay"`** on every cohort. Replay = any
       cohort whose as-of date predates its creation timestamp; set
       automatically, never user-editable. Replay cohorts are
       **excluded from the OOS scorecard by default** — the date was
@@ -1114,7 +1153,7 @@ helper) — this is an extension, not a fork.
 
 ### Creation
 
-- [ ] Natural flow: run a screen with the existing as-of picker →
+- [x] Natural flow: run a screen with the existing as-of picker →
       "Track these matches" → replay cohort with as_of = the screen's
       date, entry = next trading day's open. API `as_of` param on
       POST /api/cohorts; CLI `cohort create --as-of YYYY-MM-DD`.
@@ -1122,11 +1161,11 @@ helper) — this is an extension, not a fork.
 
 ### Performance engine (`screener/cohort_perf.py`, pure functions)
 
-- [ ] **Window**: open[entry_date] → close[min(end_date, latest bar)];
+- [x] **Window**: open[entry_date] → close[min(end_date, latest bar)];
       `end_date` param on evaluation (API GET /api/cohorts/{id}/
       performance?end=…, CLI `cohort perf <id> [--end]`), default
       latest. end < entry+1 → pending semantics, no metrics.
-- [ ] **Metric set (locked)** — cohort level, weighted (equal or
+- [x] **Metric set (locked)** — cohort level, weighted (equal or
       allocation weights): cumulative return gross & net (round-trip
       haircut); excess vs same-entry-date universe baseline over the
       identical window (shared helper — never reimplemented) and vs
@@ -1136,30 +1175,30 @@ helper) — this is an extension, not a fork.
       contributors by weighted contribution. **Sharpe reported only
       when window ≥ 60 bars**, else "window too short" — annualised
       Sharpe on a fortnight is noise and the tool says so.
-- [ ] **Per-symbol table**: entry px, end px, return g/n, excess,
+- [x] **Per-symbol table**: entry px, end px, return g/n, excess,
       own max DD, weight, contribution; stale symbols flagged and
       retained (Item-16 rule unchanged).
-- [ ] **Equity curve series** (cohort vs baseline vs Nifty, indexed to
+- [x] **Equity curve series** (cohort vs baseline vs Nifty, indexed to
       100 at entry) returned for charting; UI cohort-detail view gains
       the curve chart + metrics panel; milestone table (5/20/60)
       retained alongside — milestones remain the cross-cohort
       comparison units, the panel is the deep dive.
-- [ ] Existing forward cohorts gain the same panel with zero migration
+- [x] Existing forward cohorts gain the same panel with zero migration
       (mode defaults to "forward" on read for old records).
 
 ### Tests (≥12)
 
-- [ ] Replay excluded from OOS scorecard (the wall test).
-- [ ] Mode auto-set; not user-overridable via API payload.
-- [ ] Hand-computed window return, excess, and max drawdown (incl. DD
+- [x] Replay excluded from OOS scorecard (the wall test).
+- [x] Mode auto-set; not user-overridable via API payload.
+- [x] Hand-computed window return, excess, and max drawdown (incl. DD
       dates) on an engineered path; equity curve indexes to 100.
-- [ ] end_date clamping to latest bar; end<entry+1 → pending; end on a
+- [x] end_date clamping to latest bar; end<entry+1 → pending; end on a
       non-trading day resolves to prior bar.
-- [ ] Sharpe suppressed under 60 bars, present and hand-checked over.
-- [ ] Weighted vs equal contribution arithmetic on dispersion.
-- [ ] Adjustment invariance holds for replay windows (reuse the
+- [x] Sharpe suppressed under 60 bars, present and hand-checked over.
+- [x] Weighted vs equal contribution arithmetic on dispersion.
+- [x] Adjustment invariance holds for replay windows (reuse the
       halving test at a historical as_of).
-- [ ] Old cohort records (pre-mode) readable, default forward.
+- [x] Old cohort records (pre-mode) readable, default forward.
 
 ## 12. Recurring operations (not one-time)
 

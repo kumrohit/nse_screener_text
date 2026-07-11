@@ -718,13 +718,25 @@ async function switchUniverse(){
 let COHORTS_CACHE=[], COHORTS_VIEW="list", COHORTS_DETAIL_ID=null,
     COHORTS_SCORECARD_HASH=null, COHORTS_SCORECARD_CACHE={};
 
+function _trackAsOf(){
+  // ROADMAP Item 17: a screen run with an explicit as-of date (not
+  // "latest") produces a REPLAY cohort when tracked — the future was
+  // already visible when the screen ran, so it's in-sample by
+  // construction and excluded from the OOS scorecard. `run()` always
+  // stamps LAST_SPEC.as_of to either an explicit date or "latest".
+  const a = LAST_SPEC && LAST_SPEC.as_of;
+  return (a && a !== "latest") ? a : undefined;
+}
 async function trackMatchesAsCohort(btnEl){
   if(!LAST_SPEC || !LAST_MATCHES.length){ err("Run a screen with matches first."); return }
   try{
     const symbols = LAST_MATCHES.map(m=>m.symbol);
-    const j = await api("/api/cohorts", {spec: LAST_SPEC, symbols});
+    const as_of = _trackAsOf();
+    const j = await api("/api/cohorts", {spec: LAST_SPEC, symbols, as_of});
     if(btnEl){btnEl.textContent="📈 tracking"; btnEl.disabled=true}
-    toast(`Tracking ${symbols.length} matches — cohort ${j.cohort_id}`);
+    toast(j.mode==="replay"
+      ? `Tracking ${symbols.length} matches as of ${j.as_of} (replay) — cohort ${j.cohort_id}`
+      : `Tracking ${symbols.length} matches — cohort ${j.cohort_id}`);
   }catch(e){ err("Could not create cohort: "+e.message) }
 }
 async function trackAllocationAsCohort(btnEl){
@@ -733,10 +745,13 @@ async function trackAllocationAsCohort(btnEl){
   }
   try{
     const positions = LAST_ALLOCATION.positions.map(p=>({symbol:p.symbol, value:p.value}));
+    const as_of = _trackAsOf();
     const j = await api("/api/cohorts",
-      {spec: LAST_SPEC, positions, method: LAST_ALLOCATION.method});
+      {spec: LAST_SPEC, positions, method: LAST_ALLOCATION.method, as_of});
     if(btnEl){btnEl.textContent="📈 tracking"; btnEl.disabled=true}
-    toast(`Tracking portfolio (${positions.length} positions) — cohort ${j.cohort_id}`);
+    toast(j.mode==="replay"
+      ? `Tracking portfolio as of ${j.as_of} (replay) — cohort ${j.cohort_id}`
+      : `Tracking portfolio (${positions.length} positions) — cohort ${j.cohort_id}`);
   }catch(e){ err("Could not create cohort: "+e.message) }
 }
 
@@ -762,7 +777,132 @@ function openCohortSymbolChart(sym){
   if(!c) return;
   openChart(sym, c.spec, c.entry_date);
 }
-function openCohortDetail(id){ COHORTS_VIEW="detail"; COHORTS_DETAIL_ID=id; renderCohortsPanel(); }
+let COHORTS_PERF_CACHE={}, COHORTS_PERF_END=null, COHORTS_PERF_DATA=null,
+    COHORTS_PERF_ERROR=null;
+function openCohortDetail(id){
+  COHORTS_VIEW="detail"; COHORTS_DETAIL_ID=id;
+  COHORTS_PERF_END=null; COHORTS_PERF_DATA=null; COHORTS_PERF_ERROR=null;
+  renderCohortsPanel();
+  loadCohortDetailPerf();
+}
+async function loadCohortDetailPerf(){
+  const c=COHORTS_CACHE.find(x=>x.cohort_id===COHORTS_DETAIL_ID);
+  if(!c || !c.entry_date) return;  // pending — nothing to fetch yet
+  // capture what THIS fetch is for, so a slower, now-stale in-flight
+  // request (e.g. the initial default-window load, still pending when
+  // the user clicks "apply" on a different end date) can't clobber a
+  // newer one that already landed — only apply the result if nothing
+  // has changed while it was in flight.
+  const requestedId=c.cohort_id, requestedEnd=COHORTS_PERF_END;
+  const key=requestedId+"|"+(requestedEnd||"");
+  let data=null, error=null;
+  try{
+    if(!COHORTS_PERF_CACHE[key]){
+      const qs = requestedEnd ? ("?end="+encodeURIComponent(requestedEnd)) : "";
+      COHORTS_PERF_CACHE[key] = await api("/api/cohorts/"+requestedId+"/performance"+qs);
+    }
+    data = COHORTS_PERF_CACHE[key];
+  }catch(e){
+    error = e.message;
+  }
+  if(COHORTS_VIEW==="detail" && COHORTS_DETAIL_ID===requestedId
+     && COHORTS_PERF_END===requestedEnd){
+    COHORTS_PERF_DATA = data; COHORTS_PERF_ERROR = error;
+    renderCohortsPanel();
+  }
+}
+function applyCohortPerfEnd(){
+  COHORTS_PERF_END = $("cohortPerfEnd").value || null;
+  COHORTS_PERF_DATA = null; COHORTS_PERF_ERROR = null;
+  renderCohortsPanel();
+  loadCohortDetailPerf();
+}
+function resetCohortPerfEnd(){
+  COHORTS_PERF_END = null; COHORTS_PERF_DATA = null; COHORTS_PERF_ERROR = null;
+  renderCohortsPanel();
+  loadCohortDetailPerf();
+}
+const PERF_SCOL={cohort:"var(--amber)", baseline:"var(--pass)", nifty:"#5B9BD5"};
+function renderEquityCurveSvg(ec){
+  if(!ec || !ec.dates || !ec.dates.length) return "";
+  const W=680,H=160,P=8;
+  const series=[["cohort",ec.cohort]];
+  if(ec.baseline) series.push(["baseline",ec.baseline]);
+  if(ec.nifty) series.push(["nifty",ec.nifty]);
+  let vals=[100];
+  series.forEach(([,a])=>{vals=vals.concat(a)});
+  const mn=Math.min(...vals),mx=Math.max(...vals),sp=(mx-mn)||1;
+  const n=ec.dates.length;
+  const X=i=>P+(W-2*P)*i/((n-1)||1);
+  const Y=v=>H-P-(H-2*P)*(v-mn)/sp;
+  let svg=`<line x1="${P}" x2="${W-P}" y1="${Y(100).toFixed(1)}" y2="${Y(100).toFixed(1)}" stroke="var(--muted)" stroke-dasharray="4 4" stroke-width="1"/>`;
+  let leg="";
+  series.forEach(([name,a])=>{
+    const color=PERF_SCOL[name];
+    const path=a.map((v,i)=>`${i?"L":"M"}${X(i).toFixed(1)},${Y(v).toFixed(1)}`).join("");
+    svg+=`<path d="${path}" fill="none" stroke="${color}" stroke-width="1.6"/>`;
+    leg+=`<span style="color:${color}">— ${name}</span>`;
+  });
+  return `<div class="spark"><svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img" aria-label="equity curve, indexed to 100 at entry">${svg}</svg>
+    <div class="sleg">${leg}<span style="float:right">${ec.dates[0]} → ${ec.dates[ec.dates.length-1]}</span></div></div>`;
+}
+function renderPerfMetrics(perf){
+  const dd=perf.max_drawdown;
+  const cells=[
+    ["Cumulative gross", btSigned(perf.gross)],
+    ["Cumulative net", btSigned(perf.net)],
+    ["Excess vs. baseline (net)", btSigned(perf.excess_net_baseline)],
+    ["Excess vs. Nifty (net)", perf.excess_net_nifty!==null?btSigned(perf.excess_net_nifty):"—"],
+    ["Annualised vol", perf.annualized_vol!==null?btPct(perf.annualized_vol):"—"],
+    ["Sharpe", perf.sharpe!==null?perf.sharpe.toFixed(2):"—"],
+    ["Max drawdown", btPct(dd.pct)],
+    ["Hit rate (positive)", btPct(perf.hit_rate_positive)],
+    ["Hit rate (vs. baseline)", btPct(perf.hit_rate_vs_baseline)],
+  ];
+  return `<div class="mgrid" style="margin-top:8px">
+      ${cells.map(([k,v])=>`<div class="m"><div class="k">${k}</div><div class="v">${v}</div></div>`).join("")}
+    </div>
+    ${perf.sharpe===null?`<div class="capnote">Sharpe: ${perf.sharpe_note}</div>`:""}
+    <div class="capnote">Window ${perf.entry_date} → ${perf.end_date} (${perf.n_bars} bars) `+
+    `· max drawdown peak ${dd.peak_date} → trough ${dd.trough_date}</div>`;
+}
+function renderContributorsTable(contributors){
+  const rows=contributors.map(c=>`
+    <tr style="border-bottom:1px dashed var(--line)">
+      <td style="padding:5px 8px"><b>${c.symbol}</b></td>
+      <td style="padding:5px 8px" class="mini">${(c.weight*100).toFixed(1)}%</td>
+      <td style="padding:5px 8px">${btSigned(c.return_gross)}</td>
+      <td style="padding:5px 8px">${btSigned(c.contribution_gross)}</td>
+      <td style="padding:5px 8px" class="mini">${btPct(c.max_drawdown_pct)}</td>
+    </tr>`).join("");
+  return `<table style="width:100%;border-collapse:collapse;font-family:var(--sans);font-size:12px;margin-top:6px">
+    <thead><tr style="border-bottom:1px solid var(--line);text-align:left;color:var(--muted)">
+      <th style="padding:5px 8px">Symbol</th><th style="padding:5px 8px">Weight</th>
+      <th style="padding:5px 8px">Return</th><th style="padding:5px 8px">Contribution</th>
+      <th style="padding:5px 8px">Own max DD</th>
+    </tr></thead><tbody>${rows}</tbody></table>`;
+}
+function renderPerformanceSection(c){
+  if(!c.entry_date){
+    return `<div class="pdesc" style="display:block;margin-top:8px">Performance panel `+
+      `available once this cohort is active (pending — no entry bar yet).</div>`;
+  }
+  const endControl = `<div class="row" style="margin-top:4px">
+      <label class="asof">evaluate to <input type="date" id="cohortPerfEnd" value="${COHORTS_PERF_END||""}"></label>
+      <button class="btnsm" onclick="applyCohortPerfEnd()" type="button">apply</button>
+      ${COHORTS_PERF_END?`<button class="btnsm" onclick="resetCohortPerfEnd()" type="button">reset to latest</button>`:""}
+    </div>`;
+  if(COHORTS_PERF_ERROR){
+    return endControl+`<div class="pdesc" style="display:block;margin-top:8px">Could not load performance: ${COHORTS_PERF_ERROR}</div>`;
+  }
+  if(!COHORTS_PERF_DATA){
+    return endControl+`<div class="pdesc" style="display:block;margin-top:8px">loading performance…</div>`;
+  }
+  const perf=COHORTS_PERF_DATA;
+  return endControl + renderEquityCurveSvg(perf.equity_curve) + renderPerfMetrics(perf)
+    + `<div class="eyebrow" style="margin-top:10px">Contributors (weighted, best to worst)</div>`
+    + renderContributorsTable(perf.contributors);
+}
 function openCohortScorecard(specHash){
   COHORTS_VIEW="scorecard"; COHORTS_SCORECARD_HASH=specHash;
   renderCohortsPanel();
@@ -790,6 +930,11 @@ function cohortSpecSummary(c){
   const conds=(c.spec.conditions||[]);
   return conds.map(x=>x.type).join(" + ")||"(no conditions)";
 }
+function replayBadge(c){
+  return c.mode==="replay"
+    ? `<span class="badge" title="Replay: as of ${c.as_of}, in-sample by construction — excluded from the OOS scorecard">REPLAY</span>`
+    : "";
+}
 function nextMilestoneLabel(c){
   for(const h of [5,20,60]){ if(c.milestones[String(h)]===null) return `${h}-bar pending` }
   return "complete";
@@ -811,7 +956,7 @@ function renderCohortsPanel(){
          aria-label="Open cohort ${c.cohort_id}"
          onclick="openCohortDetail('${c.cohort_id}')"
          onkeydown="onCardKey(event,'${c.cohort_id}',openCohortDetail)">
-      <span class="sym" style="color:var(--amber);min-width:auto">${c.cohort_id}</span>
+      <span class="sym" style="color:var(--amber);min-width:auto">${c.cohort_id}</span>${replayBadge(c)}
       <span class="mini">${c.status}${age!==null?` · ${age}d`:""}</span>
       <span class="mini">${c.symbols.length} symbols</span>
       <span class="mini">${cur && cur.net!==null?`current net ${btSigned(cur.net)}`:"—"}</span>
@@ -861,11 +1006,13 @@ function renderCohortDetail(p){
   p.innerHTML=`
     <button class="btnsm" onclick="backToCohortsList()" type="button">← back to cohorts</button>
     <div class="pdesc" style="display:block;margin-top:8px">
-      <b style="color:var(--text)">${c.cohort_id}</b> · ${c.status} · universe ${c.universe}
+      <b style="color:var(--text)">${c.cohort_id}</b>${replayBadge(c)} · ${c.status} · universe ${c.universe}
       · created ${c.created_ts.replace("T"," ").slice(0,16)}
+      ${c.mode==="replay"?` · as of ${c.as_of}`:""}
       ${c.entry_date?` · entered ${c.entry_date}`:" · pending entry"}
       ${c.notes?`<br>${c.notes}`:""}
     </div>
+    ${c.survivorship_note?`<div class="evcaveat" style="opacity:.85;margin-top:4px">${c.survivorship_note}</div>`:""}
     <div class="row" style="margin-top:8px">
       <button class="btnsm" onclick="openCohortScorecard('${c.spec_hash}')" type="button">view scorecard for this spec</button>
     </div>
@@ -882,7 +1029,9 @@ function renderCohortDetail(p){
     </table>
     <div class="evcaveat" style="margin-top:10px;opacity:.85">Survivorship-free by `+
       `construction — every tracked symbol stays in this cohort even if `+
-      `later delisted or suspended (flagged stale above), never dropped.</div>`;
+      `later delisted or suspended (flagged stale above), never dropped.</div>
+    <div class="eyebrow" style="margin-top:16px">Performance (deep dive)</div>
+    ${renderPerformanceSection(c)}`;
 }
 function renderCohortScorecard(p){
   const j=COHORTS_SCORECARD_CACHE[COHORTS_SCORECARD_HASH];

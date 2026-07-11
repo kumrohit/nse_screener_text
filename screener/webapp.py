@@ -40,8 +40,8 @@ from fastapi import FastAPI
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 
-from . import (allocate, backtest, cohorts as cohorts_mod, config, dsl,
-              evaluator, explain, indicators, universes)
+from . import (allocate, backtest, cohort_perf, cohorts as cohorts_mod,
+              config, dsl, evaluator, explain, indicators, universes)
 
 app = FastAPI(title="NSE Text Screener")
 
@@ -577,14 +577,23 @@ class CohortCreateIn(BaseModel):
                                          # positions — each needs symbol+value)
     method: str = "equal"                # display label; ignored if symbols given
     notes: str = ""
+    as_of: str | None = None            # ROADMAP Item 17: replay cohort if
+                                         # given; mode is derived server-side
+                                         # from this alone — deliberately no
+                                         # `mode` field on this model, so a
+                                         # caller cannot pass one to override it
 
 
 def _attach_current(cohort: dict, panels: dict) -> dict:
     """A response-shaping helper, not a stored field: `current` is
     recomputed fresh on every read (never frozen, never persisted) —
-    see cohorts.current_snapshot's docstring."""
+    see cohorts.current_snapshot's docstring. `survivorship_note`
+    (ROADMAP Item 17) is attached the same way for replay cohorts —
+    static given `mode`, so no reason to store it on every record."""
     out = dict(cohort)
     out["current"] = cohorts_mod.current_snapshot(cohort, panels)
+    if cohort["mode"] == cohorts_mod.MODE_REPLAY:
+        out["survivorship_note"] = cohorts_mod.REPLAY_SURVIVORSHIP_NOTE
     return out
 
 
@@ -612,9 +621,11 @@ def create_cohort_endpoint(body: CohortCreateIn):
         else:
             weights = cohorts_mod.weights_from_symbols(body.symbols)
             symbols = body.symbols
+        st = _load_state(_ACTIVE_UNIVERSE)
         cohort = cohorts_mod.create_cohort(
             universe_id=_ACTIVE_UNIVERSE, spec=spec, symbols=symbols,
-            weights=weights, notes=body.notes)
+            weights=weights, notes=body.notes, as_of=body.as_of,
+            panels=st["panels"])
     except (ValueError, dsl.DSLValidationError, KeyError) as exc:
         return JSONResponse({"error": str(exc)}, status_code=422)
     return cohort
@@ -653,6 +664,31 @@ def scorecard_endpoint(spec_hash: str):
         _ACTIVE_UNIVERSE, spec_hash, st["panels"],
         config.liquidity_gate_cr(_ACTIVE_UNIVERSE),
         backtest_log_entries=log_entries)
+
+
+@app.get("/api/cohorts/{cohort_id}/performance")
+def cohort_performance_endpoint(cohort_id: str, end: str | None = None):
+    """The ROADMAP Item 17 performance panel — cumulative return, excess
+    vs. baseline/Nifty, vol, max drawdown, hit rates, contributors, and
+    an equity curve for one cohort's window (entry_date -> `end`,
+    default latest bar). Same engine for forward and replay cohorts;
+    `end` lets a forward cohort be evaluated to an earlier point too,
+    not just replay ones."""
+    st = _load_state(_ACTIVE_UNIVERSE)
+    cohort = cohorts_mod.get_cohort(
+        _ACTIVE_UNIVERSE, cohort_id, st["panels"],
+        config.liquidity_gate_cr(_ACTIVE_UNIVERSE))
+    if cohort is None:
+        return JSONResponse({"error": "not found"}, status_code=404)
+    perf = cohort_perf.evaluate_performance(
+        cohort, st["panels"], list(st["panels"].keys()),
+        config.liquidity_gate_cr(_ACTIVE_UNIVERSE), end_date=end,
+        benchmark=st.get("benchmark"))
+    if perf is None:
+        return JSONResponse(
+            {"error": "no evaluable window yet (cohort pending, or end "
+                      "resolves before entry+1)"}, status_code=422)
+    return perf
 
 
 @app.post("/api/chart")

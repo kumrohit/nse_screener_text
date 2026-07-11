@@ -81,6 +81,18 @@ STATUS_PENDING = "pending"
 STATUS_ACTIVE = "active"
 STATUS_COMPLETED = "completed"
 
+MODE_FORWARD = "forward"
+MODE_REPLAY = "replay"
+
+REPLAY_SURVIVORSHIP_NOTE = (
+    "Replay cohort: created as of a historical date with all later data "
+    "already visible — in-sample by construction, like the backtester, "
+    "and excluded from the out-of-sample scorecard for that reason. It "
+    "also carries the backtester's own survivorship caveat: symbols that "
+    "left the index/universe between the as-of date and today aren't in "
+    "today's universe list to have been trackable in the first place."
+)
+
 SURVIVORSHIP_FREE_NOTE = (
     "Out-of-sample cohorts are survivorship-free by construction: every "
     "tracked symbol stays in its cohort even if later delisted or "
@@ -96,8 +108,16 @@ def _load_all(universe_id: str) -> list[dict]:
     f = config.cohorts_file(universe_id)
     if not f.exists():
         return []
-    return [_json.loads(line) for line in f.read_text().strip().splitlines()
-           if line]
+    cohorts = [_json.loads(line) for line in f.read_text().strip().splitlines()
+              if line]
+    for c in cohorts:
+        # ROADMAP Item 17: records written before replay mode existed
+        # have no `mode`/`as_of` fields — default them on read (same
+        # pattern as screen_log's `universe` backfill) rather than
+        # migrating the file, so every reader can assume both exist.
+        c.setdefault("mode", MODE_FORWARD)
+        c.setdefault("as_of", None)
+    return cohorts
 
 
 def _save_all(universe_id: str, cohorts: list[dict]) -> None:
@@ -132,6 +152,29 @@ def weights_from_positions(positions: list[dict], method: str) -> dict:
 
 
 # ------------------------------------------------------------ calendar / entry
+def _resolve_as_of(panels: dict[str, pd.DataFrame], as_of: str) -> str:
+    """Canonicalize a user-supplied as_of to an actual trading day at or
+    before it (same lenient semantics /api/screen's as-of picker already
+    uses — a weekend/holiday date rolls back to the prior close rather
+    than being rejected), and validate it leaves at least one later bar
+    to evaluate against (ROADMAP Item 17's creation validation). Raises
+    ValueError rather than silently returning something usable, since a
+    replay cohort's entry_date and mode are derived from this value and
+    frozen forever once created."""
+    dates = backtest.common_dates(panels)
+    ts = pd.Timestamp(as_of)
+    idx = dates[dates <= ts]
+    if len(idx) == 0:
+        raise ValueError(f"as_of {as_of} predates the earliest bar in the store")
+    resolved = idx[-1]
+    pos = dates.get_loc(resolved)
+    if pos >= len(dates) - 1:
+        raise ValueError(
+            f"as_of {as_of} leaves no later bar to evaluate — pick an "
+            "earlier date")
+    return str(resolved.date())
+
+
 def _next_trading_day(panels: dict[str, pd.DataFrame], symbols: list[str],
                       after: pd.Timestamp) -> str | None:
     """First trading day strictly after `after`, using the union of
@@ -307,8 +350,16 @@ def refresh_cohort(cohort: dict, panels: dict[str, pd.DataFrame],
     symbols = list(cohort["symbols"])
 
     if cohort["status"] == STATUS_PENDING:
-        created = pd.Timestamp(cohort["created_ts"]).normalize()
-        entry_date = _next_trading_day(panels, symbols, created)
+        # ROADMAP Item 17: a replay cohort's entry is anchored to its
+        # (already-historical, already-validated) as_of date, not to
+        # "now" — this is what lets it resolve to active on the very
+        # next refresh instead of waiting for real calendar time to
+        # pass, the whole point of replay. Forward cohorts are
+        # unaffected (mode defaults to "forward", anchor stays created_ts).
+        anchor_str = (cohort["as_of"] if cohort["mode"] == MODE_REPLAY
+                     else cohort["created_ts"])
+        anchor = pd.Timestamp(anchor_str).normalize()
+        entry_date = _next_trading_day(panels, symbols, anchor)
         if entry_date is None:
             return cohort
         cohort["entry_date"] = entry_date
@@ -337,16 +388,35 @@ def refresh_cohort(cohort: dict, panels: dict[str, pd.DataFrame],
 
 def create_cohort(*, universe_id: str, spec: dict, symbols: list[str],
                   weights: dict, notes: str = "",
-                  created_ts: str | None = None) -> dict:
+                  created_ts: str | None = None,
+                  as_of: str | None = None,
+                  panels: dict[str, pd.DataFrame] | None = None) -> dict:
     """Freeze a new cohort. `spec` is re-validated defensively (same
     discipline as backtest_spec) since a caller-supplied dict may not
     have gone through dsl.validate yet. `created_ts` defaults to now —
     the override exists for tests that need a cohort created 60+ real
     trading days in the past to exercise milestone freezing without
-    waiting two months for real data to accumulate."""
+    waiting two months for real data to accumulate.
+
+    ROADMAP Item 17: `as_of` (needs `panels`) creates a REPLAY cohort —
+    as of any historical date already in the store, with all later data
+    already visible. Mode is derived here, once, and never editable
+    afterward: any explicit as_of makes this a replay cohort by
+    definition (the future is visible at creation time), never
+    "forward" no matter how recent the date. `as_of` is canonicalized
+    to an actual trading day and validated to leave a later bar via
+    `_resolve_as_of` — a bad as_of raises rather than silently creating
+    an unevaluable cohort."""
     spec = dsl.validate(spec)
     if not symbols:
         raise ValueError("a cohort needs at least one symbol")
+    mode = MODE_FORWARD
+    resolved_as_of = None
+    if as_of and as_of != "latest":
+        if panels is None:
+            raise ValueError("as_of requires panels to validate against")
+        resolved_as_of = _resolve_as_of(panels, as_of)
+        mode = MODE_REPLAY
     cohort = {
         "cohort_id": _uuid.uuid4().hex[:12],
         "created_ts": created_ts or _dt.datetime.now().isoformat(
@@ -360,6 +430,8 @@ def create_cohort(*, universe_id: str, spec: dict, symbols: list[str],
         "status": STATUS_PENDING,
         "notes": notes,
         "milestones": {str(h): None for h in HORIZONS},
+        "mode": mode,
+        "as_of": resolved_as_of,
     }
     cohorts = _load_all(universe_id)
     cohorts.append(cohort)
@@ -398,17 +470,12 @@ def get_cohort(universe_id: str, cohort_id: str,
 
 
 # ------------------------------------------------------------ scorecard
-def scorecard(universe_id: str, spec_hash: str,
-             panels: dict[str, pd.DataFrame], min_turnover_cr: float,
-             backtest_log_entries: list[dict] | None = None) -> dict:
-    """Per-spec IS-vs-OOS scorecard: this spec's cohorts aggregated per
-    horizon, side by side with the most recent logged backtest run for
-    the same spec_hash (if any). <20 total tracked names at a horizon
-    suppresses the mean — evidence accumulation, not hypothesis
-    testing, and the scorecard says so rather than printing a number
-    that looks more confident than the sample supports."""
-    cohorts = list_cohorts(universe_id, panels, min_turnover_cr,
-                           spec_hash=spec_hash)
+def _aggregate_scorecard_horizons(cohorts: list[dict]) -> dict:
+    """Per-horizon mean/median/hit-rate on excess net, from whatever
+    cohort group is handed in — the same aggregation reused for both
+    the OOS (forward) group and the walled-off replay (in-sample)
+    group (ROADMAP Item 17), so the two numbers are computed identically
+    and only differ in which cohorts fed them."""
     per_horizon = {}
     for h in HORIZONS:
         key = str(h)
@@ -432,6 +499,30 @@ def scorecard(universe_id: str, spec_hash: str,
             "median_excess_net": round(float(np.median(arr)), 4),
             "hit_rate": round(float((arr > 0).mean()), 4),
         }
+    return per_horizon
+
+
+def scorecard(universe_id: str, spec_hash: str,
+             panels: dict[str, pd.DataFrame], min_turnover_cr: float,
+             backtest_log_entries: list[dict] | None = None) -> dict:
+    """Per-spec IS-vs-OOS scorecard: this spec's cohorts aggregated per
+    horizon, side by side with the most recent logged backtest run for
+    the same spec_hash (if any). <20 total tracked names at a horizon
+    suppresses the mean — evidence accumulation, not hypothesis
+    testing, and the scorecard says so rather than printing a number
+    that looks more confident than the sample supports.
+
+    ROADMAP Item 17's integrity wall: replay-mode cohorts (created as
+    of a historical date, all later data already visible at creation
+    time) are in-sample by construction and NEVER enter `horizons` —
+    they get their own clearly-labelled `replay` block, using the same
+    aggregation helper, so they're visible without being able to
+    silently inflate the out-of-sample numbers."""
+    cohorts = list_cohorts(universe_id, panels, min_turnover_cr,
+                           spec_hash=spec_hash)
+    forward_cohorts = [c for c in cohorts if c["mode"] == MODE_FORWARD]
+    replay_cohorts = [c for c in cohorts if c["mode"] == MODE_REPLAY]
+    per_horizon = _aggregate_scorecard_horizons(forward_cohorts)
 
     in_sample = None
     if backtest_log_entries:
@@ -447,8 +538,13 @@ def scorecard(universe_id: str, spec_hash: str,
 
     return {
         "spec_hash": spec_hash,
-        "n_cohorts_total": len(cohorts),
+        "n_cohorts_total": len(forward_cohorts),
         "horizons": per_horizon,
+        "replay": {
+            "label": "replay (in-sample) — NOT part of the OOS scorecard",
+            "n_cohorts": len(replay_cohorts),
+            "horizons": _aggregate_scorecard_horizons(replay_cohorts),
+        },
         "in_sample": in_sample,
         "footnote": "IS is survivorship-flattered; OOS is small-sample.",
         "survivorship_free_note": SURVIVORSHIP_FREE_NOTE,

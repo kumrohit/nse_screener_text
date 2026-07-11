@@ -161,14 +161,23 @@ identical horizons/baseline/entry convention, so the two numbers are
 directly comparable. Nothing is ever dropped: a symbol that later
 delists or gets suspended is flagged stale and carries its last close
 forward instead of quietly exiting the sample, which is the one bias a
-backtest can't remove and a forward tracker can. The **📈 cohorts** panel
-lists every tracked cohort (age, current return, next milestone due),
-opens into a per-symbol detail table (click a symbol for its full chart
-with the entry date marked), and links to a **scorecard** — in-sample
-(backtest) vs. out-of-sample (cohorts) side by side per horizon, with
-the mean suppressed below 20 tracked names rather than shown with false
-confidence. See [TECHNICAL_DESIGN.md §12h](TECHNICAL_DESIGN.md) for the
-full methodology.
+backtest can't remove and a forward tracker can. Running the screen
+with an explicit **as-of** date first and then tracking it freezes a
+**replay** cohort instead — as of that historical date, with everything
+that happened after already visible, so it's in-sample by construction
+and excluded from the out-of-sample scorecard (a REPLAY badge marks it
+everywhere). The **📈 cohorts** panel lists every tracked cohort (age,
+current return, next milestone due), opens into a per-symbol detail
+table (click a symbol for its full chart with the entry date marked)
+plus a **performance panel** — cumulative return, excess vs. baseline
+and vs. Nifty, annualised vol, max drawdown with dates, hit rates,
+weighted contributors, and an equity curve, evaluable to any date (not
+just the fixed 5/20/60-bar milestones) — and links to a **scorecard**:
+in-sample (backtest) vs. out-of-sample (cohorts) side by side per
+horizon, with the mean suppressed below 20 tracked names rather than
+shown with false confidence. See [TECHNICAL_DESIGN.md
+§12h](TECHNICAL_DESIGN.md)/[§12i](TECHNICAL_DESIGN.md) for the full
+methodology.
 
 With no price store yet, the app boots into a labelled 11-stock demo
 universe so everything above is explorable immediately after clone.
@@ -228,6 +237,13 @@ python -m screener.cli cohort list                      # every tracked cohort, 
 python -m screener.cli cohort show <cohort_id>           # per-symbol table, frozen milestones
 python -m screener.cli scorecard flat_base_52w            # IS (backtest) vs OOS (cohorts), by horizon
 
+# replay cohort: freeze it as of a historical date instead — in-sample
+# by construction, so it's excluded from the OOS scorecard above
+python -m screener.cli cohort create --preset flat_base_52w --symbols RELIANCE TCS \
+  --as-of 2026-01-15
+python -m screener.cli cohort perf <cohort_id>            # full performance panel
+python -m screener.cli cohort perf <cohort_id> --end 2026-04-01  # evaluate to an earlier date
+
 # other universes: backfill once, then screen/backtest like any other
 python -m screener.cli backfill --universe nse_full     # ~15 min, 2,047 symbols
 python -m screener.cli backfill --universe nse_etf      # <1 min, 36 curated ETFs
@@ -285,14 +301,16 @@ Unknown keys are flagged and ignored rather than silently doing nothing. The eff
 ## Tests
 
 ```bash
-python -m pytest tests/                    # 283 tests: synthetic series with known answers,
+python -m pytest tests/                    # 313 tests: synthetic series with known answers,
                                            # evidence-layer agreement, web API contract,
                                            # allocation-engine invariants, backtester
                                            # methodology (event dedup, entry convention,
                                            # baseline, costs, bootstrap, vectorizer
                                            # consistency), universe registry, cohort
                                            # tracker (adjustment invariance, milestone
-                                           # freezing, baseline parity, scorecard)
+                                           # freezing, baseline parity, scorecard),
+                                           # cohort replay & performance engine (mode
+                                           # wall, hand-computed metrics, Sharpe gate)
 cd web/visual && npm test                  # visual regression: 6 baseline screenshots
                                            # against a live demo-mode server (see below)
 python -m tests.golden_harness             # live parser scoring vs 23 hand-verified queries

@@ -273,7 +273,10 @@ def cmd_backtest(args) -> None:
 def cmd_cohort_create(args) -> None:
     """Freeze a cohort for walk-forward out-of-sample tracking
     (ROADMAP Item 16) — either the matches from the most recent logged
-    screen for this universe, or an explicit spec + symbol list."""
+    screen for this universe, or an explicit spec + symbol list. `--as-of`
+    (ROADMAP Item 17) freezes a REPLAY cohort instead — as of any
+    historical date already in the store — which is in-sample by
+    construction and excluded from the OOS scorecard."""
     from . import cohorts as cohorts_mod
     universe_id = getattr(args, "universe", universes.DEFAULT_UNIVERSE)
 
@@ -306,12 +309,21 @@ def cmd_cohort_create(args) -> None:
                      "— nothing to track.")
 
     weights = cohorts_mod.weights_from_symbols(symbols)
-    cohort = cohorts_mod.create_cohort(
-        universe_id=universe_id, spec=spec, symbols=symbols,
-        weights=weights, notes=args.notes or "")
+    panels = None
+    if getattr(args, "as_of", None):
+        prices = _load_prices(universe_id)
+        panels = indicators.build_panels(prices)
+    try:
+        cohort = cohorts_mod.create_cohort(
+            universe_id=universe_id, spec=spec, symbols=symbols,
+            weights=weights, notes=args.notes or "",
+            as_of=getattr(args, "as_of", None), panels=panels)
+    except ValueError as exc:
+        sys.exit(str(exc))
     print(dsl.describe(spec))
+    mode_note = f", mode={cohort['mode']}" if cohort["mode"] == "replay" else ""
     print(f"Created cohort {cohort['cohort_id']} — {len(symbols)} symbols, "
-         f"universe={universe_id}, status={cohort['status']}")
+         f"universe={universe_id}, status={cohort['status']}{mode_note}")
 
 
 def cmd_cohort_list(args) -> None:
@@ -340,8 +352,11 @@ def cmd_cohort_show(args) -> None:
     if c is None:
         sys.exit(f"No cohort {args.cohort_id!r} in universe {universe_id!r}")
 
+    mode_line = f"  [REPLAY — as of {c['as_of']}]" if c["mode"] == "replay" else ""
     print(f"Cohort {c['cohort_id']}  status={c['status']}  "
-         f"entry={c['entry_date'] or 'pending'}")
+         f"entry={c['entry_date'] or 'pending'}{mode_line}")
+    if c["mode"] == "replay":
+        print(cohorts_mod.REPLAY_SURVIVORSHIP_NOTE)
     print(dsl.describe(c["spec"]))
     print(f"Symbols ({c['weights']['method']} weighted): "
          f"{', '.join(c['symbols'])}")
@@ -358,6 +373,55 @@ def cmd_cohort_show(args) -> None:
     if current and current["gross"] is not None:
         print(f"  current (live, unfrozen): gross {current['gross']*100:+.2f}%"
              f"  net {current['net']*100:+.2f}%")
+
+
+def cmd_cohort_perf(args) -> None:
+    """The ROADMAP Item 17 performance panel for one cohort's window
+    (entry_date -> --end, default latest bar) — same engine for forward
+    and replay cohorts."""
+    from . import cohort_perf, cohorts as cohorts_mod, data_ingest
+    universe_id = getattr(args, "universe", universes.DEFAULT_UNIVERSE)
+    prices = _load_prices(universe_id)
+    panels = indicators.build_panels(prices)
+    c = cohorts_mod.get_cohort(universe_id, args.cohort_id, panels,
+                               config.liquidity_gate_cr(universe_id))
+    if c is None:
+        sys.exit(f"No cohort {args.cohort_id!r} in universe {universe_id!r}")
+
+    perf = cohort_perf.evaluate_performance(
+        c, panels, list(panels.keys()),
+        config.liquidity_gate_cr(universe_id), end_date=args.end,
+        benchmark=data_ingest.load_benchmark(universe_id))
+    if perf is None:
+        sys.exit("No evaluable window yet — cohort is pending, or --end "
+                 "resolves before entry+1.")
+
+    print(f"Cohort {c['cohort_id']}  window {perf['entry_date']} -> "
+         f"{perf['end_date']}  ({perf['n_bars']} bars)\n")
+    print(f"  cumulative: gross {perf['gross']*100:+.2f}%  net "
+         f"{perf['net']*100:+.2f}%")
+    print(f"  excess vs. baseline: gross {perf['excess_gross_baseline']*100:+.2f}%"
+         f"  net {perf['excess_net_baseline']*100:+.2f}%")
+    if perf["excess_net_nifty"] is not None:
+        print(f"  excess vs. Nifty:    gross {perf['excess_gross_nifty']*100:+.2f}%"
+             f"  net {perf['excess_net_nifty']*100:+.2f}%")
+    print(f"  annualised vol: {perf['annualized_vol']*100:.2f}%" if
+         perf["annualized_vol"] is not None else "  annualised vol: —")
+    dd = perf["max_drawdown"]
+    print(f"  max drawdown: {dd['pct']*100:.2f}%  "
+         f"(peak {dd['peak_date']} -> trough {dd['trough_date']})")
+    if perf["sharpe"] is not None:
+        print(f"  sharpe: {perf['sharpe']:.2f}")
+    else:
+        print(f"  sharpe: — ({perf['sharpe_note']})")
+    print(f"  hit rate positive: {perf['hit_rate_positive']*100:.0f}%  "
+         f"vs. baseline: {perf['hit_rate_vs_baseline']*100:.0f}%")
+    print("\n  contributors (weighted, best to worst):")
+    for ctr in perf["contributors"]:
+        print(f"    {ctr['symbol']:<12} weight {ctr['weight']*100:5.1f}%  "
+             f"return {ctr['return_gross']*100:+7.2f}%  "
+             f"contribution {ctr['contribution_gross']*100:+6.2f}%  "
+             f"own max DD {ctr['max_drawdown_pct']*100:+.2f}%")
 
 
 def cmd_scorecard(args) -> None:
@@ -399,6 +463,17 @@ def cmd_scorecard(args) -> None:
         if is_h and not is_h.get("insufficient", True):
             print(f"  {h}-bar IS:  mean excess net "
                  f"{is_h['excess_net']['mean']*100:+.2f}%")
+    if sc["replay"]["n_cohorts"]:
+        print(f"\n{sc['replay']['label']} ({sc['replay']['n_cohorts']} cohorts):")
+        for h in ("5", "20", "60"):
+            rh = sc["replay"]["horizons"][h]
+            if rh["insufficient"]:
+                print(f"  {h}-bar: insufficient sample "
+                     f"({rh['n_names']} names, {rh['n_cohorts']} cohorts)")
+            else:
+                print(f"  {h}-bar: mean excess net {rh['mean_excess_net']*100:+.2f}%"
+                     f"  hit-rate {rh['hit_rate']*100:.0f}%  "
+                     f"({rh['n_cohorts']} cohorts, {rh['n_names']} names)")
     print(f"\n{sc['footnote']}")
     print(sc["survivorship_free_note"])
 
@@ -517,6 +592,11 @@ def main() -> None:
     chc.add_argument("query", nargs="?", default="",
                      help="JSON spec (with --json)")
     chc.add_argument("--notes", default="")
+    chc.add_argument("--as-of", dest="as_of", default=None,
+                     help="freeze a REPLAY cohort as of this historical "
+                          "date (ROADMAP Item 17) instead of a forward "
+                          "one — in-sample by construction, excluded "
+                          "from the OOS scorecard")
     _add_universe_arg(chc)
     chc.set_defaults(func=cmd_cohort_create)
 
@@ -528,6 +608,15 @@ def main() -> None:
     chs.add_argument("cohort_id")
     _add_universe_arg(chs)
     chs.set_defaults(func=cmd_cohort_show)
+
+    chp = ch_sub.add_parser("perf", help="performance panel for one "
+                            "cohort's window (ROADMAP Item 17)")
+    chp.add_argument("cohort_id")
+    chp.add_argument("--end", default=None,
+                     help="evaluate to this date instead of the latest "
+                          "bar (default: latest bar)")
+    _add_universe_arg(chp)
+    chp.set_defaults(func=cmd_cohort_perf)
 
     scc = sub.add_parser("scorecard",
                          help="per-spec IS-vs-OOS scorecard (ROADMAP "

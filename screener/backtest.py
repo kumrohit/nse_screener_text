@@ -460,6 +460,26 @@ def compute_baseline(panels: dict[str, pd.DataFrame], symbols: list[str],
     return baseline
 
 
+def daily_baseline_returns(panels: dict[str, pd.DataFrame],
+                           symbols: list[str], min_turnover_cr: float
+                           ) -> pd.Series:
+    """Same-date equal-weight mean *daily* (close-to-close) return
+    across all liquidity-passing universe symbols, indexed by date.
+    `compute_baseline()` above answers "what did the universe do over
+    the next h bars from a signal date" — a genuinely different
+    question from this one, "what did the universe do on this one
+    calendar day," which an equity curve needs at every date in an
+    arbitrary-length window (ROADMAP Item 17's cohort performance
+    engine). Same liquidity-filtering machinery (`liquidity_series`),
+    so the two functions stay siblings rather than diverging on what
+    counts as "the universe" for one but not the other."""
+    liq_all = {sym: liquidity_series(panels[sym], min_turnover_cr)
+              for sym in symbols}
+    rets = {sym: panels[sym]["close"].pct_change().where(liq_all[sym])
+           for sym in symbols}
+    return pd.concat(rets, axis=1, sort=True).mean(axis=1, skipna=True)
+
+
 def _dedup_events(idx_true: np.ndarray, cooldown: int) -> list[int]:
     events = []
     last_event = -(10 ** 9)
