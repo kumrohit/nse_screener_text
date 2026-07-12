@@ -1202,6 +1202,23 @@ class TestCohortEndpoints:
         r = self.client.get("/api/cohorts/doesnotexist")
         assert r.status_code == 404
 
+    def test_delete_removes_cohort(self, tmp_path, monkeypatch):
+        from screener import config
+        monkeypatch.setattr(config, "DATA_DIR", tmp_path)
+        created = self.client.post("/api/cohorts", json={
+            "spec": self.SPEC, "symbols": ["STEADY"]}).json()
+        r = self.client.delete(f"/api/cohorts/{created['cohort_id']}")
+        assert r.status_code == 200 and r.json() == {"removed": True}
+        assert self.client.get(
+            f"/api/cohorts/{created['cohort_id']}").status_code == 404
+
+    def test_delete_unknown_cohort_returns_removed_false(
+            self, tmp_path, monkeypatch):
+        from screener import config
+        monkeypatch.setattr(config, "DATA_DIR", tmp_path)
+        r = self.client.delete("/api/cohorts/doesnotexist")
+        assert r.status_code == 200 and r.json() == {"removed": False}
+
     def test_list_filters_by_spec_hash(self, tmp_path, monkeypatch):
         from screener import config, dsl
         monkeypatch.setattr(config, "DATA_DIR", tmp_path)

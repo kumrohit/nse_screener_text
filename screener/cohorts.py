@@ -469,6 +469,21 @@ def get_cohort(universe_id: str, cohort_id: str,
     return None
 
 
+def delete_cohort(universe_id: str, cohort_id: str) -> bool:
+    """Remove one cohort permanently — a plain user action (mis-tracked
+    a screen, cleaning up an old test), not a lifecycle transition, so
+    it skips `refresh_cohort` entirely and just rewrites the store
+    (same full-rewrite pattern `_save_all` already uses). Returns
+    whether anything was actually removed, same contract as the
+    watchlist/user-preset delete endpoints."""
+    cohorts = _load_all(universe_id)
+    kept = [c for c in cohorts if c["cohort_id"] != cohort_id]
+    removed = len(kept) != len(cohorts)
+    if removed:
+        _save_all(universe_id, kept)
+    return removed
+
+
 # ------------------------------------------------------------ scorecard
 def _aggregate_scorecard_horizons(cohorts: list[dict]) -> dict:
     """Per-horizon mean/median/hit-rate on excess net, from whatever

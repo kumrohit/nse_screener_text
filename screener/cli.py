@@ -375,6 +375,19 @@ def cmd_cohort_show(args) -> None:
              f"  net {current['net']*100:+.2f}%")
 
 
+def cmd_cohort_delete(args) -> None:
+    """Permanently remove one cohort. No undo — matches this project's
+    existing watchlist/user-preset delete commands, which are also
+    unconfirmed at the CLI layer (a confirmation prompt belongs to an
+    interactive UI, not a scriptable command)."""
+    from . import cohorts as cohorts_mod
+    universe_id = getattr(args, "universe", universes.DEFAULT_UNIVERSE)
+    removed = cohorts_mod.delete_cohort(universe_id, args.cohort_id)
+    if not removed:
+        sys.exit(f"No cohort {args.cohort_id!r} in universe {universe_id!r}")
+    print(f"Deleted cohort {args.cohort_id}")
+
+
 def cmd_cohort_perf(args) -> None:
     """The ROADMAP Item 17 performance panel for one cohort's window
     (entry_date -> --end, default latest bar) — same engine for forward
@@ -608,6 +621,11 @@ def main() -> None:
     chs.add_argument("cohort_id")
     _add_universe_arg(chs)
     chs.set_defaults(func=cmd_cohort_show)
+
+    chd = ch_sub.add_parser("delete", help="permanently remove one cohort")
+    chd.add_argument("cohort_id")
+    _add_universe_arg(chd)
+    chd.set_defaults(func=cmd_cohort_delete)
 
     chp = ch_sub.add_parser("perf", help="performance panel for one "
                             "cohort's window (ROADMAP Item 17)")

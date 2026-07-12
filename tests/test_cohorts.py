@@ -77,6 +77,44 @@ class TestCohortCreation:
         assert len(lst) == 1
 
 
+class TestDeleteCohort:
+    def test_delete_removes_it_and_returns_true(self, tmp_data_dir):
+        c = cohorts.create_cohort(universe_id="u", spec=SPEC,
+                                  symbols=["A"],
+                                  weights=cohorts.weights_from_symbols(["A"]))
+        assert cohorts.delete_cohort("u", c["cohort_id"]) is True
+        assert cohorts._load_all("u") == []
+
+    def test_delete_unknown_id_returns_false_and_changes_nothing(
+            self, tmp_data_dir):
+        cohorts.create_cohort(universe_id="u", spec=SPEC, symbols=["A"],
+                              weights=cohorts.weights_from_symbols(["A"]))
+        assert cohorts.delete_cohort("u", "doesnotexist") is False
+        assert len(cohorts._load_all("u")) == 1
+
+    def test_delete_only_removes_the_targeted_cohort(self, tmp_data_dir):
+        c1 = cohorts.create_cohort(universe_id="u", spec=SPEC,
+                                   symbols=["A"],
+                                   weights=cohorts.weights_from_symbols(["A"]))
+        c2 = cohorts.create_cohort(universe_id="u", spec=SPEC,
+                                   symbols=["B"],
+                                   weights=cohorts.weights_from_symbols(["B"]))
+        cohorts.delete_cohort("u", c1["cohort_id"])
+        remaining = cohorts._load_all("u")
+        assert len(remaining) == 1
+        assert remaining[0]["cohort_id"] == c2["cohort_id"]
+
+    def test_delete_is_scoped_to_its_own_universe(self, tmp_data_dir):
+        c = cohorts.create_cohort(universe_id="u1", spec=SPEC,
+                                  symbols=["A"],
+                                  weights=cohorts.weights_from_symbols(["A"]))
+        cohorts.create_cohort(universe_id="u2", spec=SPEC, symbols=["A"],
+                              weights=cohorts.weights_from_symbols(["A"]))
+        assert cohorts.delete_cohort("u1", c["cohort_id"]) is True
+        assert cohorts._load_all("u1") == []
+        assert len(cohorts._load_all("u2")) == 1
+
+
 class TestWeights:
     def test_equal_weights_sum_to_one(self):
         w = cohorts.weights_from_symbols(["A", "B", "C"])

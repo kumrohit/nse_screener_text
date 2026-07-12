@@ -772,6 +772,19 @@ async function loadCohortsList(){
   }
 }
 function backToCohortsList(){ COHORTS_VIEW="list"; renderCohortsPanel(); }
+async function deleteCohort(id){
+  // unlike deleteMyScreen/removeFromWatchlist (trivially re-creatable),
+  // a cohort's tracked history can't be reconstructed once gone — a
+  // confirm dialog here is worth the extra click that those skip.
+  if(!confirm(`Delete cohort ${id}? This permanently removes its `+
+    `tracked history — cannot be undone.`)) return;
+  try{
+    await fetch("/api/cohorts/"+id,{method:"DELETE"});
+    COHORTS_CACHE = COHORTS_CACHE.filter(c=>c.cohort_id!==id);
+    backToCohortsList();
+    toast(`Cohort ${id} deleted`);
+  }catch(e){ err("Could not delete cohort: "+e.message) }
+}
 function openCohortSymbolChart(sym){
   const c=COHORTS_CACHE.find(x=>x.cohort_id===COHORTS_DETAIL_ID);
   if(!c) return;
@@ -1015,6 +1028,7 @@ function renderCohortDetail(p){
     ${c.survivorship_note?`<div class="evcaveat" style="opacity:.85;margin-top:4px">${c.survivorship_note}</div>`:""}
     <div class="row" style="margin-top:8px">
       <button class="btnsm" onclick="openCohortScorecard('${c.spec_hash}')" type="button">view scorecard for this spec</button>
+      <button class="btnsm" onclick="deleteCohort('${c.cohort_id}')" type="button" style="border-color:var(--fail);color:var(--fail)">delete cohort</button>
     </div>
     <div class="eyebrow" style="margin-top:14px">Milestones</div>
     ${milestoneSummary}

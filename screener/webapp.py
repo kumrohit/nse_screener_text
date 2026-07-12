@@ -651,6 +651,16 @@ def get_cohort_endpoint(cohort_id: str):
     return _attach_current(cohort, st["panels"])
 
 
+@app.delete("/api/cohorts/{cohort_id}")
+def delete_cohort_endpoint(cohort_id: str):
+    """Permanent removal — a plain user action (mis-tracked screen,
+    cleaning up a test), same {"removed": bool} contract as the
+    watchlist/user-preset delete endpoints. Deliberately no confirmation
+    step here (that belongs in the UI, which asks before calling this)."""
+    removed = cohorts_mod.delete_cohort(_ACTIVE_UNIVERSE, cohort_id)
+    return {"removed": removed}
+
+
 @app.get("/api/scorecard/{spec_hash}")
 def scorecard_endpoint(spec_hash: str):
     st = _load_state(_ACTIVE_UNIVERSE)
