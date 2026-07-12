@@ -158,43 +158,47 @@ closes.
 
 ---
 
-## SEQUENCING — week of 2026-07-11 → cutover (updated 2026-07-11)
+## SEQUENCING — updated 2026-07-12 (post-v0.15)
 
-**Session 1 — DONE 2026-07-11: Item 16 cohort tracker.** Built and
-live-verified (CLI + API + UI, Playwright-driven), 283/283 tests green.
-Cohorts seeded from all four presets — support_50ema_uptrend,
-momentum_12_1_leaders, minervini_stage2, flat_base_52w — on BOTH
-nifty500 and nse_full (8 cohorts total, all `pending`: created today,
-so entry resolves on the next trading bar in the store). 5-bar
+**Items 16 and 17 are DONE — the tool is feature-complete for the
+current arc.** What remains is evidence generation and the calendar.
+
+**Cohort seeding — DONE 2026-07-11, not outstanding.** All 8 forward
+cohorts (support_50ema_uptrend, momentum_12_1_leaders,
+minervini_stage2, flat_base_52w × nifty500 and nse_full) were seeded
+the same day Item 16 shipped — verified still present in both
+`data/nifty500/cohorts.jsonl` and `data/nse_full/cohorts.jsonl`. 5-bar
 milestones mature before the 07-19 cutover; 20-bar lands with the
-first evidence review (~2 weeks out).
+first evidence review (~2 weeks out). Optional follow-up, not urgent:
+replay cohorts at −3m/−6m for the same four presets would give
+instant Item-17 performance panels while the forward ones age — the
+replay-vs-forward gap per preset would itself be a finding once both
+exist for the same spec.
 
-**Session 2: breadth fields + the universe comparison (resequenced —
-does NOT wait for cutover).** Market-breadth regime fields into the
-cross-sectional pre-pass, then the strategy-preset backtests on
-nifty500 vs nse_full. Prerequisite from Rohit BEFORE the run:
-pre-registered hypotheses per preset per universe, drawn from
-LITERATURE.md effect sizes (the momentum-strengthens-in-breadth
-prediction is the headline one). This run also produces the IS numbers
-that close the deferred backtest evidence loop.
+**Session 2 (next Claude Code session): breadth fields + the
+nifty500-vs-nse_full preset backtest comparison.** Unchanged from the
+07-11 plan — market-breadth regime fields into the cross-sectional
+pre-pass, then the strategy-preset backtests on nifty500 vs nse_full.
+Prerequisite from Rohit BEFORE the run: pre-registered hypotheses per
+preset per universe, drawn from LITERATURE.md effect sizes (the
+momentum-strengthens-in-breadth prediction is the headline one). This
+run also produces the IS numbers that close the deferred backtest
+evidence loop.
 
 **Rohit's own tasks this week (no Claude Code needed):**
-- Nightly cron NOW, not at cutover: `update && verify` after 18:30 IST
-  — cohort milestones and the cross-source check both want unattended
-  daily data from today.
+- Nightly cron (if not yet live) — cohort milestones and the
+  cross-source check both want unattended daily data.
 - Membership archaeology hour (gates Item 15-B's scope decision).
 - Write the session-2 hypotheses before session 2 runs.
 
-**2026-07-19 (clock): cutover chain session** — if cross-source check
-clean: config flip, yfinance to fallback, `delivery` condition +
+**2026-07-19 (7 days out): cutover chain session** — if cross-source
+check clean: config flip, yfinance to fallback, `delivery` condition +
 accumulation preset, risk log. Delivery-based presets get cohort-seeded
 the same day (their OOS clock starts latest, so no reason to add delay).
 
-**AFTER:** Item 17 — DONE 2026-07-11 (cohort replay + performance
-engine; forward cohorts got the same metrics panel with zero
-migration, as designed). Remaining: Item 15-B membership build (scope
-per archaeology); v0.11 sidebar anytime; first cohort scorecard review
-~2 weeks after seeding.
+**AFTER:** Item 15-B membership build (scope per archaeology); v0.11
+sidebar anytime; first cohort scorecard review ~2 weeks after seeding;
+the replay-vs-forward comparison above once forward milestones exist.
 
 ---
 

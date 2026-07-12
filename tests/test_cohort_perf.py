@@ -13,6 +13,8 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from tests.conftest import last_bday
+
 from screener import backtest, cohort_perf, cohorts, config, indicators
 
 
@@ -20,8 +22,7 @@ def _mk_panel(closes: np.ndarray, band: float = 0.004,
              end: pd.Timestamp | None = None, vol: float = 1_000_000.0
              ) -> pd.DataFrame:
     n = len(closes)
-    if end is None:
-        end = pd.Timestamp.today().normalize()
+    end = last_bday(end)  # weekend-safe: see conftest.last_bday
     dates = pd.bdate_range(end=end, periods=n)
     close = pd.Series(closes, index=dates)
     high, low = close * (1 + band), close * (1 - band)
@@ -341,7 +342,7 @@ class TestSharpeGate:
 class TestContribution:
     def test_weighted_vs_equal_contribution_arithmetic(self, tmp_data_dir):
         n = 200
-        base_end = pd.Timestamp.today().normalize()
+        base_end = last_bday()
         rally = _mk_panel(100 * np.cumprod(1 + np.full(n, 0.01)),
                           end=base_end)
         flat = _mk_panel(100 * np.cumprod(1 + np.full(n, 0.0001)),

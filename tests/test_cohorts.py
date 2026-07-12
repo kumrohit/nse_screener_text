@@ -15,6 +15,8 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from tests.conftest import last_bday
+
 from screener import backtest, cohorts, config, indicators
 
 
@@ -22,8 +24,7 @@ def _mk_panel(closes: np.ndarray, band: float = 0.004,
              end: pd.Timestamp | None = None, vol: float = 1_000_000.0
              ) -> pd.DataFrame:
     n = len(closes)
-    if end is None:
-        end = pd.Timestamp.today().normalize()
+    end = last_bday(end)  # weekend-safe: see conftest.last_bday
     dates = pd.bdate_range(end=end, periods=n)
     close = pd.Series(closes, index=dates)
     high, low = close * (1 + band), close * (1 - band)
@@ -315,7 +316,7 @@ class TestWeightedAggregation:
         Overweighting SYM0 must produce a materially different (higher)
         aggregate return than equal-weighting the same two symbols."""
         n = 300
-        base_end = pd.Timestamp.today().normalize()
+        base_end = last_bday()
         rally = _mk_panel(100 * np.cumprod(1 + np.full(n, 0.006)), end=base_end)
         flat = _mk_panel(100 * np.cumprod(1 + np.full(n, 0.0001)), end=base_end)
         panels = {"RALLY": rally, "FLAT": flat}

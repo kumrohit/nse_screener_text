@@ -39,3 +39,20 @@ def _isolate_webapp_log_files(tmp_path, monkeypatch):
                 "BACKTEST_LOG_FILE", "WATCHLIST_FILE", "USER_PRESETS_FILE"):
         monkeypatch.setattr(webapp, name, tmp_path / name.lower(),
                             raising=False)
+
+
+# ---------------------------------------------------------------- dates
+def last_bday(ts=None):
+    """Roll a date back to the most recent business day.
+
+    Third occurrence of the same trap (demo.py v0.3, test_cohorts.py
+    v0.14, test_cohort_perf.py v0.15): pd.bdate_range(end=<weekend>,
+    periods=n) yields n-1 dates, so any fixture anchored to
+    Timestamp.today() turns the suite red on Saturdays and Sundays.
+    Every today-anchored fixture must go through this helper.
+    """
+    import pandas as pd
+    ts = pd.Timestamp.today().normalize() if ts is None else ts
+    if ts.dayofweek >= 5:
+        ts -= pd.offsets.BDay(1)
+    return ts
