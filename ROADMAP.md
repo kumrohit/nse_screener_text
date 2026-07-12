@@ -163,17 +163,19 @@ closes.
 **Items 16 and 17 are DONE — the tool is feature-complete for the
 current arc.** What remains is evidence generation and the calendar.
 
-**Cohort seeding — DONE 2026-07-11, not outstanding.** All 8 forward
-cohorts (support_50ema_uptrend, momentum_12_1_leaders,
-minervini_stage2, flat_base_52w × nifty500 and nse_full) were seeded
-the same day Item 16 shipped — verified still present in both
-`data/nifty500/cohorts.jsonl` and `data/nse_full/cohorts.jsonl`. 5-bar
+**Cohort seeding — DONE.** All 8 forward cohorts (support_50ema_uptrend,
+momentum_12_1_leaders, minervini_stage2, flat_base_52w × nifty500 and
+nse_full) were seeded 2026-07-11, the same day Item 16 shipped. 5-bar
 milestones mature before the 07-19 cutover; 20-bar lands with the
-first evidence review (~2 weeks out). Optional follow-up, not urgent:
-replay cohorts at −3m/−6m for the same four presets would give
-instant Item-17 performance panels while the forward ones age — the
-replay-vs-forward gap per preset would itself be a finding once both
-exist for the same spec.
+first evidence review (~2 weeks out). **Replay cohorts — DONE
+2026-07-12**: 16 more (the same 4 presets × 2 universes × −3m/−6m
+as-of dates, 2026-04-10 and 2026-01-10) give immediate Item-17
+performance panels rather than waiting on the forward ones to age —
+all `completed` already (3-6 months of history exists), so the first
+replay-vs-forward comparison for a given preset/universe pair is
+available today, not in two weeks. Match counts ranged 8-256 depending
+on preset/universe/date (`flat_base_52w` is the tightest filter, `-6m`
+on `nse_full`'s wider `momentum_12_1_leaders` the loosest).
 
 **Session 2 (next Claude Code session): breadth fields + the
 nifty500-vs-nse_full preset backtest comparison.** Unchanged from the
