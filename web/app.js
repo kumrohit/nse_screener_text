@@ -772,14 +772,29 @@ async function loadCohortsList(){
   }
 }
 function backToCohortsList(){ COHORTS_VIEW="list"; renderCohortsPanel(); }
-async function deleteCohort(id){
-  // unlike deleteMyScreen/removeFromWatchlist (trivially re-creatable),
-  // a cohort's tracked history can't be reconstructed once gone — a
-  // confirm dialog here is worth the extra click that those skip.
-  if(!confirm(`Delete cohort ${id}? This permanently removes its `+
-    `tracked history — cannot be undone.`)) return;
+async function deleteCohort(id, mode, status){
+  // Two tiers (survivorship guard): replay/pending cohorts hard-delete
+  // after a confirm; forward cohorts past entry are the OOS evidence —
+  // they require a reason and are tombstoned (hidden but counted by
+  // the scorecard), so losers can't be quietly erased.
+  const hardTier = (mode === "replay" || status === "pending");
+  let reason = null;
+  if(hardTier){
+    if(!confirm(`Delete cohort ${id}? This permanently removes its `+
+      `tracked history — cannot be undone.`)) return;
+  }else{
+    reason = prompt(`"${id}" is a FORWARD cohort past its entry bar — `+
+      `part of the out-of-sample track record. It will be tombstoned `+
+      `(hidden, but counted on the scorecard), not erased.\n\n`+
+      `Deletion reason (required):`);
+    if(reason === null) return;              // cancelled
+    if(!reason.trim()){ toast("deletion needs a reason"); return; }
+  }
   try{
-    await fetch("/api/cohorts/"+id,{method:"DELETE"});
+    const url = "/api/cohorts/"+id+
+      (reason ? "?reason="+encodeURIComponent(reason.trim()) : "");
+    const resp = await fetch(url,{method:"DELETE"});
+    if(!resp.ok){const j=await resp.json();toast(j.error||"delete failed");return;}
     COHORTS_CACHE = COHORTS_CACHE.filter(c=>c.cohort_id!==id);
     backToCohortsList();
     toast(`Cohort ${id} deleted`);
@@ -1028,7 +1043,7 @@ function renderCohortDetail(p){
     ${c.survivorship_note?`<div class="evcaveat" style="opacity:.85;margin-top:4px">${c.survivorship_note}</div>`:""}
     <div class="row" style="margin-top:8px">
       <button class="btnsm" onclick="openCohortScorecard('${c.spec_hash}')" type="button">view scorecard for this spec</button>
-      <button class="btnsm" onclick="deleteCohort('${c.cohort_id}')" type="button" style="border-color:var(--fail);color:var(--fail)">delete cohort</button>
+      <button class="btnsm" onclick="deleteCohort('${c.cohort_id}','${c.mode}','${c.status}')" type="button" style="border-color:var(--fail);color:var(--fail)">delete cohort</button>
     </div>
     <div class="eyebrow" style="margin-top:14px">Milestones</div>
     ${milestoneSummary}

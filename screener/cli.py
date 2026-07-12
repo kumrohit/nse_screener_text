@@ -376,13 +376,21 @@ def cmd_cohort_show(args) -> None:
 
 
 def cmd_cohort_delete(args) -> None:
-    """Permanently remove one cohort. No undo — matches this project's
-    existing watchlist/user-preset delete commands, which are also
-    unconfirmed at the CLI layer (a confirmation prompt belongs to an
-    interactive UI, not a scriptable command)."""
+    """Two-tier removal: replay/pending cohorts hard-delete; forward
+    cohorts past entry need --reason and are tombstoned (hidden but
+    counted by the scorecard — the OOS survivorship guard). Still
+    unconfirmed at the CLI layer, like the other delete commands."""
     from . import cohorts as cohorts_mod
     universe_id = getattr(args, "universe", universes.DEFAULT_UNIVERSE)
-    removed = cohorts_mod.delete_cohort(universe_id, args.cohort_id)
+    result = cohorts_mod.delete_cohort(universe_id, args.cohort_id,
+                                       reason=getattr(args, "reason", None))
+    if result["error"]:
+        print(f"not deleted: {result['error']}")
+        raise SystemExit(1)
+    print("tombstoned (hidden, counted in scorecard)"
+          if result["tombstoned"] else
+          ("removed" if result["removed"] else "not found"))
+    removed = result["removed"]
     if not removed:
         sys.exit(f"No cohort {args.cohort_id!r} in universe {universe_id!r}")
     print(f"Deleted cohort {args.cohort_id}")
@@ -625,6 +633,7 @@ def main() -> None:
     chd = ch_sub.add_parser("delete", help="permanently remove one cohort")
     chd.add_argument("cohort_id")
     _add_universe_arg(chd)
+    chd.add_argument("--reason", help="required to delete a forward cohort past its entry bar (tombstoned, not erased)")
     chd.set_defaults(func=cmd_cohort_delete)
 
     chp = ch_sub.add_parser("perf", help="performance panel for one "

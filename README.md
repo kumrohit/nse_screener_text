@@ -243,7 +243,8 @@ python -m screener.cli cohort create --preset flat_base_52w --symbols RELIANCE T
   --as-of 2026-01-15
 python -m screener.cli cohort perf <cohort_id>            # full performance panel
 python -m screener.cli cohort perf <cohort_id> --end 2026-04-01  # evaluate to an earlier date
-python -m screener.cli cohort delete <cohort_id>          # permanent — mis-tracked or test cohorts
+python -m screener.cli cohort delete <cohort_id>          # replay/pending: hard delete
+python -m screener.cli cohort delete <cohort_id> --reason "mis-tracked screen"  # forward past entry: tombstoned, not erased
 
 # other universes: backfill once, then screen/backtest like any other
 python -m screener.cli backfill --universe nse_full     # ~15 min, 2,047 symbols
@@ -302,7 +303,7 @@ Unknown keys are flagged and ignored rather than silently doing nothing. The eff
 ## Tests
 
 ```bash
-python -m pytest tests/                    # 319 tests: synthetic series with known answers,
+python -m pytest tests/                    # 323 tests: synthetic series with known answers,
                                            # evidence-layer agreement, web API contract,
                                            # allocation-engine invariants, backtester
                                            # methodology (event dedup, entry convention,

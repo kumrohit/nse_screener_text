@@ -83,14 +83,14 @@ class TestDeleteCohort:
         c = cohorts.create_cohort(universe_id="u", spec=SPEC,
                                   symbols=["A"],
                                   weights=cohorts.weights_from_symbols(["A"]))
-        assert cohorts.delete_cohort("u", c["cohort_id"]) is True
+        assert cohorts.delete_cohort("u", c["cohort_id"])["removed"] is True
         assert cohorts._load_all("u") == []
 
     def test_delete_unknown_id_returns_false_and_changes_nothing(
             self, tmp_data_dir):
         cohorts.create_cohort(universe_id="u", spec=SPEC, symbols=["A"],
                               weights=cohorts.weights_from_symbols(["A"]))
-        assert cohorts.delete_cohort("u", "doesnotexist") is False
+        assert cohorts.delete_cohort("u", "doesnotexist")["removed"] is False
         assert len(cohorts._load_all("u")) == 1
 
     def test_delete_only_removes_the_targeted_cohort(self, tmp_data_dir):
@@ -111,7 +111,7 @@ class TestDeleteCohort:
                                   weights=cohorts.weights_from_symbols(["A"]))
         cohorts.create_cohort(universe_id="u2", spec=SPEC, symbols=["A"],
                               weights=cohorts.weights_from_symbols(["A"]))
-        assert cohorts.delete_cohort("u1", c["cohort_id"]) is True
+        assert cohorts.delete_cohort("u1", c["cohort_id"])["removed"] is True
         assert cohorts._load_all("u1") == []
         assert len(cohorts._load_all("u2")) == 1
 
@@ -461,3 +461,72 @@ class TestCurrentReturn:
         assert snap is not None
         assert snap["gross"] is not None
         assert set(snap["per_symbol"]) == {"SYM0", "SYM1"}
+
+
+class TestTwoTierDeletion:
+    """Survivorship guard: forward cohorts past entry tombstone with a
+    reason; replay/pending hard-delete; scorecard counts tombstones."""
+
+    def _activated_forward(self, tmp_data_dir):
+        panels = _universe(n_symbols=2)
+        pmap = {"A": panels["SYM0"], "B": panels["SYM1"]}
+        c = cohorts.create_cohort(universe_id="u", spec=SPEC,
+                                  symbols=["A"],
+                                  weights=cohorts.weights_from_symbols(["A"]))
+        # a cohort created *now* has no entry bar yet (correct pending
+        # behaviour) — backdate created_ts to mimic a cohort created
+        # weeks ago, exactly how activated forward cohorts arise in
+        # reality; mode stays "forward" (set at creation, not derived).
+        raw = cohorts._load_all("u")
+        raw[0]["created_ts"] = str(pmap["A"].index[-30].date())
+        cohorts._save_all("u", raw)
+        lst = cohorts.list_cohorts("u", pmap, 0)
+        assert lst and lst[0]["status"] in ("active", "completed")
+        return c, pmap
+
+    def test_forward_past_entry_requires_reason(self, tmp_data_dir):
+        c, _ = self._activated_forward(tmp_data_dir)
+        res = cohorts.delete_cohort("u", c["cohort_id"])
+        assert res["removed"] is False and "reason" in res["error"]
+        # still visible — nothing changed
+        assert len(cohorts._load_all("u")) == 1
+
+    def test_forward_tombstones_with_reason_and_scorecard_counts(
+            self, tmp_data_dir):
+        c, pmap = self._activated_forward(tmp_data_dir)
+        res = cohorts.delete_cohort("u", c["cohort_id"],
+                                    reason="mis-tracked screen")
+        assert res == {"removed": True, "tombstoned": True, "error": None}
+        # hidden from views, record retained
+        assert cohorts.list_cohorts("u", pmap, 0) == []
+        raw = cohorts._load_all("u")
+        assert len(raw) == 1 and raw[0]["status"] == "deleted"
+        assert raw[0]["delete_reason"] == "mis-tracked screen"
+        # counted on the scorecard
+        sc = cohorts.scorecard("u", c["spec_hash"], pmap, 0)
+        assert sc["deleted_forward"]["count"] == 1
+        assert sc["deleted_forward"]["reasons"] == ["mis-tracked screen"]
+        # double delete refused
+        res2 = cohorts.delete_cohort("u", c["cohort_id"], reason="again")
+        assert res2["error"] == "already deleted"
+
+    def test_replay_hard_deletes_without_reason(self, tmp_data_dir):
+        panels = _universe(n_symbols=2)
+        pmap = {"A": panels["SYM0"], "B": panels["SYM1"]}
+        as_of = str(pmap["A"].index[-40].date())
+        c = cohorts.create_cohort(universe_id="u", spec=SPEC,
+                                  symbols=["A"],
+                                  weights=cohorts.weights_from_symbols(["A"]),
+                                  as_of=as_of, panels=pmap)
+        cohorts.list_cohorts("u", pmap, 0)   # activate via refresh
+        res = cohorts.delete_cohort("u", c["cohort_id"])
+        assert res == {"removed": True, "tombstoned": False, "error": None}
+        assert cohorts._load_all("u") == []
+
+    def test_tombstone_is_inert_on_refresh(self, tmp_data_dir):
+        c, pmap = self._activated_forward(tmp_data_dir)
+        cohorts.delete_cohort("u", c["cohort_id"], reason="cleanup")
+        before = cohorts._load_all("u")[0].copy()
+        cohorts.list_cohorts("u", pmap, 0)   # refresh pass
+        after = cohorts._load_all("u")[0]
+        assert after == before               # tombstones never advance

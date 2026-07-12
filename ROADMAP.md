@@ -141,7 +141,7 @@ for both larger universes simultaneously, vs. a 4 GB target) — no
 on-demand/LRU rearchitecture needed. A universe with no sector/industry
 data (nse_full, nse_etf) now warns loudly on a sector-based screen
 instead of silently returning zero matches, and the preset dropdown
-filters itself to what's applicable on the active universe. 319 tests
+filters itself to what's applicable on the active universe. 323 tests
 green, no known failures — `tests/conftest.py` makes the suite hermetic
 (forces demo mode, and isolates every webapp log/store file to a
 per-test tmp path, so it passes identically in CI and on a dev machine

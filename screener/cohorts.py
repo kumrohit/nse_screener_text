@@ -80,6 +80,8 @@ MIN_SCORECARD_NAMES = 20
 STATUS_PENDING = "pending"
 STATUS_ACTIVE = "active"
 STATUS_COMPLETED = "completed"
+STATUS_DELETED = "deleted"     # tombstone — hidden from views, counted
+                               # in the scorecard (survivorship guard)
 
 MODE_FORWARD = "forward"
 MODE_REPLAY = "replay"
@@ -349,6 +351,9 @@ def refresh_cohort(cohort: dict, panels: dict[str, pd.DataFrame],
     (ROADMAP Item 16's explicit design), so viewing is refreshing."""
     symbols = list(cohort["symbols"])
 
+    if cohort.get("status") == STATUS_DELETED:
+        return cohort  # tombstones never advance
+
     if cohort["status"] == STATUS_PENDING:
         # ROADMAP Item 17: a replay cohort's entry is anchored to its
         # (already-historical, already-validated) as_of date, not to
@@ -455,6 +460,8 @@ def list_cohorts(universe_id: str, panels: dict[str, pd.DataFrame],
             changed = True
     if changed:
         _save_all(universe_id, cohorts)
+    cohorts = [c for c in cohorts
+              if c.get("status") != STATUS_DELETED]
     if spec_hash:
         cohorts = [c for c in cohorts if c["spec_hash"] == spec_hash]
     return cohorts
@@ -469,19 +476,58 @@ def get_cohort(universe_id: str, cohort_id: str,
     return None
 
 
-def delete_cohort(universe_id: str, cohort_id: str) -> bool:
-    """Remove one cohort permanently — a plain user action (mis-tracked
-    a screen, cleaning up an old test), not a lifecycle transition, so
-    it skips `refresh_cohort` entirely and just rewrites the store
-    (same full-rewrite pattern `_save_all` already uses). Returns
-    whether anything was actually removed, same contract as the
-    watchlist/user-preset delete endpoints."""
+def delete_cohort(universe_id: str, cohort_id: str,
+                 reason: str | None = None) -> dict:
+    """Two-tier deletion (survivorship guard).
+
+    HARD delete (record removed): replay cohorts and pending forward
+    cohorts — no out-of-sample evidence value at stake (a replay date
+    was chosen with hindsight; a pending cohort has no entry bar yet).
+
+    TOMBSTONE (record kept, hidden, counted): forward cohorts at or
+    past their entry bar. These ARE the OOS track record — silently
+    hard-deleting the losers would hand-craft the exact survivorship
+    bias the tracker exists to escape. Requires a non-empty `reason`,
+    which the scorecard surfaces as a per-spec deleted count.
+
+    Returns {"removed": bool, "tombstoned": bool, "error": str|None}.
+    """
     cohorts = _load_all(universe_id)
-    kept = [c for c in cohorts if c["cohort_id"] != cohort_id]
-    removed = len(kept) != len(cohorts)
-    if removed:
-        _save_all(universe_id, kept)
-    return removed
+    target = next((c for c in cohorts if c["cohort_id"] == cohort_id),
+                  None)
+    if target is None:
+        return {"removed": False, "tombstoned": False, "error": None}
+    if target.get("status") == STATUS_DELETED:
+        return {"removed": False, "tombstoned": False,
+                "error": "already deleted"}
+
+    hard = (target.get("mode") == MODE_REPLAY
+            or target.get("status") == STATUS_PENDING)
+    if hard:
+        _save_all(universe_id,
+                  [c for c in cohorts if c["cohort_id"] != cohort_id])
+        return {"removed": True, "tombstoned": False, "error": None}
+
+    if not (reason and reason.strip()):
+        return {"removed": False, "tombstoned": False,
+                "error": "forward cohort past entry: a deletion reason "
+                         "is required (tombstoned, not erased — the OOS "
+                         "scorecard counts deletions)"}
+    target["status"] = STATUS_DELETED
+    target["deleted_ts"] = pd.Timestamp.now().isoformat(timespec="seconds")
+    target["delete_reason"] = reason.strip()
+    _save_all(universe_id, cohorts)
+    return {"removed": True, "tombstoned": True, "error": None}
+
+
+def deleted_forward_summary(universe_id: str, spec_hash: str) -> dict:
+    """Tombstone census for one spec — feeds the scorecard footer."""
+    tombs = [c for c in _load_all(universe_id)
+            if c.get("status") == STATUS_DELETED
+            and c.get("mode") == MODE_FORWARD
+            and c["spec_hash"] == spec_hash]
+    return {"count": len(tombs),
+            "reasons": [c.get("delete_reason", "") for c in tombs]}
 
 
 # ------------------------------------------------------------ scorecard
@@ -554,6 +600,7 @@ def scorecard(universe_id: str, spec_hash: str,
     return {
         "spec_hash": spec_hash,
         "n_cohorts_total": len(forward_cohorts),
+        "deleted_forward": deleted_forward_summary(universe_id, spec_hash),
         "horizons": per_horizon,
         "replay": {
             "label": "replay (in-sample) — NOT part of the OOS scorecard",

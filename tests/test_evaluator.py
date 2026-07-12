@@ -1208,7 +1208,9 @@ class TestCohortEndpoints:
         created = self.client.post("/api/cohorts", json={
             "spec": self.SPEC, "symbols": ["STEADY"]}).json()
         r = self.client.delete(f"/api/cohorts/{created['cohort_id']}")
-        assert r.status_code == 200 and r.json() == {"removed": True}
+        assert r.status_code == 200
+        j = r.json()
+        assert j["removed"] is True and j["tombstoned"] is False
         assert self.client.get(
             f"/api/cohorts/{created['cohort_id']}").status_code == 404
 
@@ -1217,7 +1219,7 @@ class TestCohortEndpoints:
         from screener import config
         monkeypatch.setattr(config, "DATA_DIR", tmp_path)
         r = self.client.delete("/api/cohorts/doesnotexist")
-        assert r.status_code == 200 and r.json() == {"removed": False}
+        assert r.status_code == 200 and r.json()["removed"] is False
 
     def test_list_filters_by_spec_hash(self, tmp_path, monkeypatch):
         from screener import config, dsl

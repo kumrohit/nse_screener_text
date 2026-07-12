@@ -652,13 +652,17 @@ def get_cohort_endpoint(cohort_id: str):
 
 
 @app.delete("/api/cohorts/{cohort_id}")
-def delete_cohort_endpoint(cohort_id: str):
-    """Permanent removal — a plain user action (mis-tracked screen,
-    cleaning up a test), same {"removed": bool} contract as the
-    watchlist/user-preset delete endpoints. Deliberately no confirmation
-    step here (that belongs in the UI, which asks before calling this)."""
-    removed = cohorts_mod.delete_cohort(_ACTIVE_UNIVERSE, cohort_id)
-    return {"removed": removed}
+def delete_cohort_endpoint(cohort_id: str, reason: str | None = None):
+    """Two-tier removal (see cohorts.delete_cohort): replay/pending
+    cohorts hard-delete; forward cohorts past entry require `reason`
+    and are tombstoned — hidden but counted by the scorecard, so the
+    OOS track record can't be quietly curated. Confirmation UX lives
+    in the UI, which asks (and collects the reason) before calling."""
+    result = cohorts_mod.delete_cohort(_ACTIVE_UNIVERSE, cohort_id,
+                                       reason=reason)
+    if result["error"] and not result["removed"]:
+        return JSONResponse(result, status_code=400)
+    return result
 
 
 @app.get("/api/scorecard/{spec_hash}")
