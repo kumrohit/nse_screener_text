@@ -5,7 +5,27 @@ commits that complete them; anything descoped gets struck through with a
 one-line reason, not silently deleted. Design rationale lives in
 TECHNICAL_DESIGN.md; this file is the *what and in which order*.
 
-Status snapshot: v0.15 — **Item 17 (cohort replay & performance
+Status snapshot: v0.16 — **Market breadth regime fields complete**
+2026-07-12 (ROADMAP §C, LITERATURE.md §9) — `pct_above_200dma` and
+`pct_at_20d_high`, computed from the universe itself with no external
+data feed, and a new `breadth` DSL condition ("market breadth
+positive" → pct_above_200dma ≥ 50) usable everywhere a condition can
+be: screening, evidence trails, and the backtester (a vectorized
+`compute_breadth_series`/`_vec_breadth` path, verified byte-exact
+against the row-by-row evaluator — not stride-approximated, since
+breadth is cheap to compute exactly). Deliberately shipped as a
+standalone gap-fill, decoupled from the nse_full-vs-nifty500 preset
+backtest comparison it was originally paired with in the ROADMAP §C
+sequencing — that comparison stays blocked on pre-registered hypotheses
+(the point of pre-registering is writing the prediction down before
+running the analysis), so building the tool wasn't held hostage to a
+human prerequisite. Also shipped this session: two-tier cohort
+deletion (v0.15.2) — a forward cohort past its entry bar is now
+tombstoned with a required reason and counted on the scorecard rather
+than hard-deleted, closing a survivorship-bias gap in v0.15.1's
+original plain-delete.
+
+**v0.15** — **Item 17 (cohort replay & performance
 engine) complete** 2026-07-11 — a cohort can now be created as of ANY
 historical date (`as_of`, resolved leniently to the trading day at or
 before it, validated to leave ≥1 later bar) instead of only "starting
@@ -141,13 +161,14 @@ for both larger universes simultaneously, vs. a 4 GB target) — no
 on-demand/LRU rearchitecture needed. A universe with no sector/industry
 data (nse_full, nse_etf) now warns loudly on a sector-based screen
 instead of silently returning zero matches, and the preset dropdown
-filters itself to what's applicable on the active universe. 323 tests
+filters itself to what's applicable on the active universe. 334 tests
 green, no known failures — `tests/conftest.py` makes the suite hermetic
 (forces demo mode, and isolates every webapp log/store file to a
 per-test tmp path, so it passes identically in CI and on a dev machine
 that has already run `backfill`, without ever touching real `data/`).
-Next up: breadth fields + the universe comparison (Session 2 of the
-2026-07-11 sequencing block, below), point-in-time index membership
+Next up: the nse_full-vs-nifty500 preset backtest comparison (needs
+Rohit's pre-registered hypotheses first — breadth fields themselves are
+done, see status snapshot above), point-in-time index membership
 (Item 15 Phase B, gated on data-source archaeology), the deferred
 sidebar layout restructure, the preset evidence loop-closure (Item
 14's own follow-on, now also fed by Items 16/17's OOS/replay
@@ -177,15 +198,15 @@ available today, not in two weeks. Match counts ranged 8-256 depending
 on preset/universe/date (`flat_base_52w` is the tightest filter, `-6m`
 on `nse_full`'s wider `momentum_12_1_leaders` the loosest).
 
-**Session 2 (next Claude Code session): breadth fields + the
-nifty500-vs-nse_full preset backtest comparison.** Unchanged from the
-07-11 plan — market-breadth regime fields into the cross-sectional
-pre-pass, then the strategy-preset backtests on nifty500 vs nse_full.
-Prerequisite from Rohit BEFORE the run: pre-registered hypotheses per
-preset per universe, drawn from LITERATURE.md effect sizes (the
-momentum-strengthens-in-breadth prediction is the headline one). This
-run also produces the IS numbers that close the deferred backtest
-evidence loop.
+**Session 2 — breadth fields DONE 2026-07-12; the comparison run still
+blocked.** Market-breadth regime fields shipped standalone (see status
+snapshot) rather than waiting on the comparison they were originally
+paired with. The nifty500-vs-nse_full strategy-preset backtest
+comparison itself is still gated: **prerequisite from Rohit BEFORE the
+run: pre-registered hypotheses per preset per universe**, drawn from
+LITERATURE.md effect sizes (the momentum-strengthens-in-breadth
+prediction is the headline one). This run also produces the IS numbers
+that close the deferred backtest evidence loop.
 
 **Rohit's own tasks this week (no Claude Code needed):**
 - Nightly cron (if not yet live) — cohort milestones and the
@@ -1031,17 +1052,29 @@ history file (symbol, entry_date, exit_date) for Nifty 500.
 - [ ] `delivery` DSL condition + vocabulary + accumulation preset
       (volume spike + delivery ≥ 60%) — the Item 2 deferred task, lands
       here.
-- [ ] **Market breadth regime fields** — computed from the universe
-      itself into the cross-sectional pre-pass: pct_above_200dma,
-      pct_at_20d_high; new `breadth` condition ("market breadth
-      positive" → pct_above_200dma ≥ 50). Regime context for every
-      equity screen without external data. Golden fixtures + preset
-      annotation (breadth filters are regime qualifiers, weak alone).
+- [x] **Market breadth regime fields** — DONE 2026-07-12, buildable
+      independently of the bhavcopy cutover (confirmed: uses the
+      existing per-symbol SMA200/high series already computed for every
+      registered universe, no bhavcopy/delivery data needed). Computed
+      from the universe itself into the cross-sectional pre-pass:
+      `pct_above_200dma`, `pct_at_20d_high`; new `breadth` condition
+      ("market breadth positive" → pct_above_200dma ≥ 50), wired through
+      screening, evidence, and the backtester's vectorized path
+      (`compute_breadth_series`/`_vec_breadth`, verified exact against
+      the row-by-row evaluator — not stride-approximated). Regime
+      context for every equity screen without external data. Golden
+      fixture + LITERATURE.md §9 annotation (practitioner basis, regime
+      qualifier, weak alone — no fabricated citation for the exact
+      two-field construction). 11 new tests.
 - [ ] Backtest loop: rerun the strategy-preset evidence closure on
       nse_full vs nifty500 — does the edge strengthen in the broader,
       less-efficient universe (the momentum literature says it should)
       or was it a large-cap artifact? That comparison is the payoff of
-      this whole item.
+      this whole item. **Blocked on Rohit's pre-registered hypotheses**
+      per preset per universe (the whole point of pre-registering is
+      writing the prediction down before running the analysis) —
+      deliberately not run yet; breadth fields above were scoped and
+      shipped separately so this gate doesn't block the tooling.
 
 ## 16. Cohort tracker (v0.14) — out-of-sample filter validation
 

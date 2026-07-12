@@ -381,7 +381,8 @@ def _stride_cross_section_series(panel: pd.DataFrame, c: dict, ctype: str,
 
 # ------------------------------------------------------------ per-symbol signal
 def _condition_series(panel, c, *, symbol, sector_by_symbol, benchmark,
-                      weekly_cache, stride, dates_grid, cs_grid) -> pd.Series:
+                      weekly_cache, stride, dates_grid, cs_grid,
+                      breadth_df=None) -> pd.Series:
     ctype = c["type"]
     if c.get("timeframe") == "weekly":
         if "panel" not in weekly_cache:
@@ -394,6 +395,8 @@ def _condition_series(panel, c, *, symbol, sector_by_symbol, benchmark,
         return _vec_rel_strength(panel, c, benchmark)
     if ctype == "sector":
         return _vec_sector(panel, c, symbol, sector_by_symbol)
+    if ctype == "breadth":
+        return _vec_breadth(panel, c, breadth_df)
     if ctype in EXPENSIVE_SYMBOL_TYPES:
         return _stride_symbol_series(panel, c, ctype, stride)
     if ctype in EXPENSIVE_CROSS_TYPES:
@@ -403,14 +406,14 @@ def _condition_series(panel, c, *, symbol, sector_by_symbol, benchmark,
 
 
 def _symbol_signal(panel, screen, *, symbol, sector_by_symbol, benchmark,
-                  stride, dates_grid, cs_grid) -> pd.Series:
+                  stride, dates_grid, cs_grid, breadth_df=None) -> pd.Series:
     weekly_cache: dict = {}
     series_list = [
         _condition_series(panel, c, symbol=symbol,
                           sector_by_symbol=sector_by_symbol,
                           benchmark=benchmark, weekly_cache=weekly_cache,
                           stride=stride, dates_grid=dates_grid,
-                          cs_grid=cs_grid)
+                          cs_grid=cs_grid, breadth_df=breadth_df)
         for c in screen["conditions"]
     ]
     combined = series_list[0]
@@ -478,6 +481,45 @@ def daily_baseline_returns(panels: dict[str, pd.DataFrame],
     rets = {sym: panels[sym]["close"].pct_change().where(liq_all[sym])
            for sym in symbols}
     return pd.concat(rets, axis=1, sort=True).mean(axis=1, skipna=True)
+
+
+def compute_breadth_series(panels: dict[str, pd.DataFrame],
+                           symbols: list[str]) -> pd.DataFrame:
+    """Date-indexed market breadth — the backtester's vectorized sibling
+    of `cross_section.compute_breadth()`'s single as-of scalar, same two
+    definitions (`pct_above_200dma`, `pct_at_20d_high`) computed at
+    every date instead of one: each symbol's own "above SMA200" /
+    "making a new 20-bar high" boolean series (NaN wherever it hasn't
+    got 200/20 prior bars yet, so `.mean(skipna=True)` excludes
+    thin-history dates rather than counting them as "not above"), then
+    the equal-weight mean across the universe per date — identical
+    NaN-exclusion policy to `compute_breadth`, just vectorized across
+    the whole calendar in one pass instead of iterating rows."""
+    above, at_high = {}, {}
+    for sym in symbols:
+        panel = panels[sym]
+        if "sma_200" not in panel.columns:
+            continue
+        above[sym] = ((panel["close"] > panel["sma_200"])
+                      .astype(float).where(panel["sma_200"].notna()))
+        prior_high = panel["high"].shift(1).rolling(20, min_periods=20).max()
+        at_high[sym] = ((panel["high"] >= prior_high)
+                        .astype(float).where(prior_high.notna()))
+    above_df = pd.concat(above, axis=1, sort=True)
+    at_high_df = pd.concat(at_high, axis=1, sort=True)
+    return pd.DataFrame({
+        "pct_above_200dma": 100 * above_df.mean(axis=1, skipna=True),
+        "pct_at_20d_high": 100 * at_high_df.mean(axis=1, skipna=True),
+    })
+
+
+def _vec_breadth(panel: pd.DataFrame, c: dict,
+                 breadth_df: pd.DataFrame | None) -> pd.Series:
+    if breadth_df is None:
+        return pd.Series(False, index=panel.index)
+    pct = breadth_df["pct_above_200dma"].reindex(panel.index).ffill()
+    result = (pct >= 50) if c["direction"] == "positive" else (pct < 50)
+    return result.fillna(False)
 
 
 def _dedup_events(idx_true: np.ndarray, cooldown: int) -> list[int]:
@@ -664,6 +706,10 @@ def backtest_spec(panels: dict[str, pd.DataFrame],
                 cs_grid[(d, w)] = cs_mod.build_cross_section(
                     panels, universe, d_str, w)
 
+    breadth_df = (compute_breadth_series(panels, symbols)
+                 if any(c["type"] == "breadth" for c in screen["conditions"])
+                 else None)
+
     signals: dict[str, pd.Series] = {}
     for sym in symbols:
         panel = panels[sym]
@@ -671,7 +717,8 @@ def backtest_spec(panels: dict[str, pd.DataFrame],
             sig = _symbol_signal(panel, screen, symbol=sym,
                                 sector_by_symbol=sector_by_symbol,
                                 benchmark=benchmark, stride=stride,
-                                dates_grid=dates_grid, cs_grid=cs_grid)
+                                dates_grid=dates_grid, cs_grid=cs_grid,
+                                breadth_df=breadth_df)
         except RuntimeError:
             continue
         liq = liquidity_series(panel, min_turnover_cr)
@@ -784,6 +831,9 @@ def verify_vectorizer_consistency(panels: dict[str, pd.DataFrame],
             for w in windows_needed:
                 cs_grid[(d, w)] = cs_mod.build_cross_section(
                     panels, universe, d_str, w)
+    breadth_df = (compute_breadth_series(panels, list(panels.keys()))
+                 if any(c["type"] == "breadth" for c in screen["conditions"])
+                 else None)
 
     rng = random.Random(seed)
     symbols = [s for s in panels if len(panels[s]) >= 260]
@@ -807,14 +857,16 @@ def verify_vectorizer_consistency(panels: dict[str, pd.DataFrame],
         sig = _symbol_signal(panel, screen, symbol=sym,
                             sector_by_symbol=sector_by_symbol,
                             benchmark=benchmark, stride=stride,
-                            dates_grid=dates_grid, cs_grid=cs_grid)
+                            dates_grid=dates_grid, cs_grid=cs_grid,
+                            breadth_df=breadth_df)
         vec_val = bool(sig.loc[date])
         as_of = str(date.date())
-        _sec_ctx, cross_ctx = evaluator._cross_sectional_context(
+        _sec_ctx, cross_ctx, breadth_ctx = evaluator._cross_sectional_context(
             screen, panels, universe, as_of)
         eval_val = evaluator.evaluate_symbol(
             panel, screen, as_of, benchmark=benchmark, symbol=sym,
-            sector_by_symbol=sector_by_symbol, cross_section=cross_ctx)
+            sector_by_symbol=sector_by_symbol, cross_section=cross_ctx,
+            breadth=breadth_ctx)
         checked += 1
         if vec_val != eval_val:
             mismatches.append({"symbol": sym, "date": as_of,

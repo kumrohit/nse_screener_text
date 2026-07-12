@@ -255,6 +255,18 @@ def _ex_sector_rank(panel, c, i, symbol, cross_section):
                "sector_ret_pct": _f(sret)}
 
 
+def _ex_breadth(panel, c, i, breadth):
+    if breadth is None or breadth.get("pct_above_200dma") is None:
+        return "breadth data unavailable (insufficient universe history)", {}
+    pct, pct_hi = breadth["pct_above_200dma"], breadth.get("pct_at_20d_high")
+    ev = (f"{_f(pct, 1)}% of the universe above its 200-day SMA "
+         f"(threshold: {'≥' if c['direction'] == 'positive' else '<'} 50%)"
+         + (f"; {_f(pct_hi, 1)}% making new 20-day highs" if pct_hi is not None
+            else ""))
+    return ev, {"pct_above_200dma": _f(pct, 1),
+               "pct_at_20d_high": _f(pct_hi, 1) if pct_hi is not None else None}
+
+
 _EXPLAINERS = {
     "compare": _ex_compare, "proximity": _ex_proximity, "trend": _ex_trend,
     "support_at_ma": _ex_support_at_ma, "cross": _ex_cross,
@@ -270,7 +282,8 @@ def explain_symbol(panel: pd.DataFrame, screen: dict,
                    benchmark: pd.Series | None = None,
                    symbol: str | None = None,
                    sector_by_symbol: pd.Series | None = None,
-                   cross_section: dict[int, pd.DataFrame] | None = None
+                   cross_section: dict[int, pd.DataFrame] | None = None,
+                   breadth: dict | None = None
                    ) -> list[dict]:
     """One evidence dict per condition, in screen order."""
     weekly = None
@@ -305,6 +318,9 @@ def explain_symbol(panel: pd.DataFrame, screen: dict,
             passed = evaluator.cond_sector(
                 panel, c, i, symbol=symbol, sector_by_symbol=sector_by_symbol)
             ev, vals = _ex_sector(panel, c, i, symbol, sector_by_symbol)
+        elif c["type"] == "breadth":
+            passed = evaluator.cond_breadth(panel, c, i, breadth=breadth)
+            ev, vals = _ex_breadth(panel, c, i, breadth)
         elif c["type"] in ("rs_percentile", "sector_rank",
                           "atr_pct_percentile"):
             cs = (cross_section or {}).get(int(c.get("window", 63)))

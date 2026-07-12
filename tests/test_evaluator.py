@@ -1873,6 +1873,150 @@ class TestCrossSectionCache:
         assert any(k[2] == dates[-1] for k in cs._CACHE)
 
 
+# ============================================================ market breadth
+# Regime context computed from the universe itself (post-v0.15 Session 2
+# prep) — LITERATURE.md §9, ROADMAP §C.
+def _breadth_universe():
+    """6 symbols, deliberately split so pct_above_200dma and
+    pct_at_20d_high are both hand-computable exactly: 4 monotonically
+    RISING for all 300 bars (each closes far above its own SMA200, and
+    every day's high exceeds the prior 20 days' — since the whole
+    series only ever increases, every bar is trivially a new 20-day
+    high); 2 monotonically FALLING (below SMA200, and never make a new
+    20-day high past the initial ramp). -> 4/6 = 66.67% on both
+    metrics, by construction."""
+    n = 300
+    up = np.full(n, 0.003)
+    down = np.full(n, -0.003)
+    panels = {}
+    for k in range(4):
+        panels[f"UP{k}"] = _mk_ohlcv(100 * np.cumprod(1 + up))
+    for k in range(2):
+        panels[f"DOWN{k}"] = _mk_ohlcv(100 * np.cumprod(1 + down))
+    uni = pd.DataFrame({"symbol": list(panels), "name": list(panels),
+                        "industry": ["Sector A"] * 6})
+    return panels, uni
+
+
+class TestMarketBreadth:
+    def test_compute_breadth_hand_computed(self):
+        from screener import cross_section as cs
+        panels, _uni = _breadth_universe()
+        b = cs.compute_breadth(panels, "latest")
+        assert b["n_symbols"] == 6
+        assert b["pct_above_200dma"] == pytest.approx(400 / 6, abs=0.01)
+        assert b["pct_at_20d_high"] == pytest.approx(400 / 6, abs=0.01)
+
+    def test_thin_history_symbol_excluded_from_denominator(self):
+        from screener import cross_section as cs
+        panels, _uni = _breadth_universe()
+        panels["NEWLIST"] = _mk_ohlcv(
+            100 * np.cumprod(1 + np.full(50, 0.001)))  # <200 bars
+        b = cs.compute_breadth(panels, "latest")
+        assert b["n_symbols"] == 6  # NEWLIST excluded, not counted "below"
+
+    def test_dsl_validate_requires_direction(self):
+        with pytest.raises(dsl.DSLValidationError):
+            dsl.validate({"conditions": [{"type": "breadth"}]})
+        with pytest.raises(dsl.DSLValidationError):
+            dsl.validate({"conditions": [
+                {"type": "breadth", "direction": "sideways"}]})
+        spec = dsl.validate({"conditions": [
+            {"type": "breadth", "direction": "positive"}]})
+        assert "market breadth positive" in dsl.describe(spec)
+
+    def test_cond_breadth_positive_and_negative(self):
+        from screener import cross_section as cs
+        from screener.evaluator import cond_breadth
+        panels, _uni = _breadth_universe()
+        b = cs.compute_breadth(panels, "latest")  # 66.67% above -> positive
+        any_panel = panels["UP0"]
+        i = len(any_panel) - 1
+        assert cond_breadth(any_panel, {"direction": "positive"}, i,
+                            breadth=b) is True
+        assert cond_breadth(any_panel, {"direction": "negative"}, i,
+                            breadth=b) is False
+
+    def test_cond_breadth_missing_context_fails_closed(self):
+        from screener.evaluator import cond_breadth
+        panels, _uni = _breadth_universe()
+        panel = panels["UP0"]
+        i = len(panel) - 1
+        assert cond_breadth(panel, {"direction": "positive"}, i,
+                            breadth=None) is False
+
+    def test_run_screen_gates_every_symbol_identically(self):
+        panels, uni = _breadth_universe()
+        spec = dsl.validate({"conditions": [
+            {"type": "breadth", "direction": "positive"}]})
+        result = run_screen(panels, spec, universe=uni)
+        assert len(result) == 6  # breadth positive -> every symbol passes
+        spec_neg = dsl.validate({"conditions": [
+            {"type": "breadth", "direction": "negative"}]})
+        assert run_screen(panels, spec_neg, universe=uni).empty
+
+    def test_combined_with_trend_narrows_to_rising_symbols_only(self):
+        panels, uni = _breadth_universe()
+        spec = dsl.validate({"conditions": [
+            {"type": "trend", "direction": "up"},
+            {"type": "breadth", "direction": "positive"}]})
+        result = run_screen(panels, spec, universe=uni)
+        assert set(result["symbol"]) == {"UP0", "UP1", "UP2", "UP3"}
+
+    def test_explainer(self):
+        from screener import cross_section as cs, explain
+        panels, _uni = _breadth_universe()
+        b = cs.compute_breadth(panels, "latest")
+        panel = panels["UP0"]
+        i = len(panel) - 1
+        spec = {"conditions": [{"type": "breadth", "direction": "positive"}]}
+        ev = explain.explain_symbol(panel, spec, symbol="UP0", breadth=b)
+        assert ev[0]["passed"] is True
+        assert "above its 200-day SMA" in ev[0]["evidence"]
+        assert ev[0]["values"]["pct_above_200dma"] is not None
+
+    def test_backtest_vectorized_matches_evaluator(self):
+        """The CRITICAL acceptance test (ROADMAP Item 14's own bar):
+        the backtester's vectorized breadth signal must never disagree
+        with the row-by-row evaluator."""
+        from screener import backtest as bt
+        panels, uni = _breadth_universe()
+        spec = dsl.validate({"conditions": [
+            {"type": "breadth", "direction": "positive"}]})
+        report = bt.verify_vectorizer_consistency(
+            panels, uni, spec, n_samples=50)
+        assert report["checked"] > 0
+        assert report["mismatches"] == []
+
+    def test_backtest_spec_runs_with_breadth_condition(self):
+        from screener import backtest as bt
+        panels, uni = _breadth_universe()
+        spec = dsl.validate({"conditions": [
+            {"type": "trend", "direction": "up"},
+            {"type": "breadth", "direction": "positive"}]})
+        result = bt.backtest_spec(panels, uni, spec, horizons=(5,),
+                                  cooldown=5, min_events=1,
+                                  sensitivity=False)
+        assert result["n_symbols"] > 0
+
+    def test_compute_breadth_series_matches_scalar_at_same_date(self):
+        """backtest.compute_breadth_series (vectorized, whole calendar)
+        and cross_section.compute_breadth (single as-of scalar) must
+        agree at the same date — two independent computations of the
+        same definition, not one calling the other."""
+        from screener import backtest as bt, cross_section as cs
+        panels, _uni = _breadth_universe()
+        symbols = list(panels.keys())
+        series_df = bt.compute_breadth_series(panels, symbols)
+        as_of = str(panels["UP0"].index[-1].date())
+        scalar = cs.compute_breadth(panels, as_of)
+        row = series_df.loc[panels["UP0"].index[-1]]
+        assert row["pct_above_200dma"] == pytest.approx(
+            scalar["pct_above_200dma"], abs=0.01)
+        assert row["pct_at_20d_high"] == pytest.approx(
+            scalar["pct_at_20d_high"], abs=0.01)
+
+
 # ============================================================ ROADMAP Item 9
 # Evidence-based strategy presets: new indicators (mom_12_1, roc_126/252,
 # sma_150(+slope)) and the atr_pct_percentile / rs_percentile-basis

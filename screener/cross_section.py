@@ -106,3 +106,58 @@ def build_cross_section(panels: dict[str, pd.DataFrame],
         _CACHE.pop(next(iter(_CACHE)))  # FIFO evict oldest
     _CACHE[key] = df
     return df
+
+
+# ---------------------------------------------------------------- breadth
+# Bounded FIFO cache, same reasoning as _CACHE above — keyed the same way
+# (id(panels), frozenset(panels), as_of) since breadth has no `window`.
+_BREADTH_CACHE: dict[tuple, dict] = {}
+_BREADTH_CACHE_MAX = 32
+
+
+def compute_breadth(panels: dict[str, pd.DataFrame], as_of: str | None = "latest"
+                    ) -> dict:
+    """Market breadth regime fields (ROADMAP breadth item, Session 2 prep)
+    — a single scalar snapshot for `as_of`, computed from the universe
+    itself with no external data feed: `pct_above_200dma` (% of symbols
+    with close > SMA200 — the standard "stocks above the 200-day moving
+    average" breadth gauge) and `pct_at_20d_high` (% of symbols making a
+    new 20-trading-day high today — the standard new-high/new-low breadth
+    convention: today's high at or above the highest high of the prior
+    20 bars, NOT including today, so a flat market can't trivially
+    satisfy it every day). A symbol needs 200 bars for SMA200 and 20
+    PRIOR bars for the new-high check to contribute at all — thin-history
+    symbols are excluded from both the numerator and denominator (same
+    NaN-exclusion policy `build_cross_section` already uses for
+    `ret_pct`), never defaulted to "not above"/"not at a high"."""
+    key = (id(panels), frozenset(panels), as_of)
+    if key in _BREADTH_CACHE:
+        return _BREADTH_CACHE[key]
+
+    above_200 = at_20high = total = 0
+    for panel in panels.values():
+        i = _row_at(panel, as_of)
+        if i is None or i < 20 or "sma_200" not in panel.columns:
+            continue
+        close, sma200 = panel["close"].iloc[i], panel["sma_200"].iloc[i]
+        cur_high = panel["high"].iloc[i]
+        prior_high = panel["high"].iloc[i - 20: i].max()  # prior 20 bars,
+                                                           # excludes today
+        if (pd.isna(close) or pd.isna(sma200) or pd.isna(cur_high)
+                or pd.isna(prior_high)):
+            continue
+        total += 1
+        if close > sma200:
+            above_200 += 1
+        if cur_high >= prior_high:
+            at_20high += 1
+
+    result = {
+        "pct_above_200dma": round(100 * above_200 / total, 2) if total else None,
+        "pct_at_20d_high": round(100 * at_20high / total, 2) if total else None,
+        "n_symbols": total,
+    }
+    if len(_BREADTH_CACHE) >= _BREADTH_CACHE_MAX:
+        _BREADTH_CACHE.pop(next(iter(_BREADTH_CACHE)))
+    _BREADTH_CACHE[key] = result
+    return result

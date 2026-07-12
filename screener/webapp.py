@@ -273,7 +273,7 @@ def _run_screen(spec: dict) -> dict:
     spec_h = dsl.spec_hash(spec)
     prior_run = _find_prior_run(spec_h)
 
-    sector_by_symbol, cross_section = evaluator._cross_sectional_context(
+    sector_by_symbol, cross_section, breadth = evaluator._cross_sectional_context(
         spec, st["panels"], st["universe"], as_of)
 
     for sym, panel in st["panels"].items():
@@ -291,7 +291,8 @@ def _run_screen(spec: dict) -> dict:
         evaluated += 1
         evidence = explain.explain_symbol(
             panel, spec, as_of, benchmark=st["benchmark"], symbol=sym,
-            sector_by_symbol=sector_by_symbol, cross_section=cross_section)
+            sector_by_symbol=sector_by_symbol, cross_section=cross_section,
+            breadth=breadth)
         n_passed = sum(e["passed"] for e in evidence)
         matched = (n_passed == len(evidence) if logic == "AND"
                    else n_passed > 0)
@@ -334,7 +335,7 @@ def _run_screen(spec: dict) -> dict:
     near_misses.sort(key=lambda r: -r["conditions_passed"])
 
     diff = _compute_diff(prior_run, matches, st, spec, as_of,
-                         sector_by_symbol, cross_section)
+                         sector_by_symbol, cross_section, breadth)
 
     _log_run(spec, st["as_of"] if as_of == "latest" else as_of,
              {"matched": len(matches), "evaluated": evaluated}, matches,
@@ -727,11 +728,12 @@ def chart(body: ChartIn):
         return JSONResponse(
             {"error": "no data as of this date"}, status_code=422)
 
-    sector_by_symbol, cross_section = evaluator._cross_sectional_context(
+    sector_by_symbol, cross_section, breadth = evaluator._cross_sectional_context(
         spec, st["panels"], st["universe"], as_of)
     evidence = explain.explain_symbol(
         panel, spec, as_of, benchmark=st["benchmark"], symbol=body.symbol,
-        sector_by_symbol=sector_by_symbol, cross_section=cross_section)
+        sector_by_symbol=sector_by_symbol, cross_section=cross_section,
+        breadth=breadth)
     return _chart_payload(panel, spec, evidence, i)
 
 
@@ -852,8 +854,8 @@ def _data_quality_flags(panel: pd.DataFrame, i: int, store_as_of: str
 
 
 def _compute_diff(prior_run: dict | None, matches: list, st: dict,
-                  spec: dict, as_of: str, sector_by_symbol, cross_section
-                  ) -> dict | None:
+                  spec: dict, as_of: str, sector_by_symbol, cross_section,
+                  breadth=None) -> dict | None:
     """"What changed since last run" (ROADMAP Item 5): symbols new to
     the match set, and symbols that dropped out — re-explained against
     *current* data so the UI can show exactly which condition now
@@ -879,7 +881,8 @@ def _compute_diff(prior_run: dict | None, matches: list, st: dict,
             continue
         ev = explain.explain_symbol(
             panel, spec, as_of, benchmark=st["benchmark"], symbol=sym,
-            sector_by_symbol=sector_by_symbol, cross_section=cross_section)
+            sector_by_symbol=sector_by_symbol, cross_section=cross_section,
+            breadth=breadth)
         failing = [e["description"] for e in ev if not e["passed"]]
         dropped_detail.append({
             "symbol": sym,
@@ -1042,12 +1045,12 @@ def watchlist_list():
         i = evaluator._row_at(panel, "latest")
         current_close = float(panel["close"].iloc[i])
         fresh_spec = {**entry["spec"], "as_of": "latest"}
-        sector_by_symbol, cross_section = evaluator._cross_sectional_context(
+        sector_by_symbol, cross_section, breadth = evaluator._cross_sectional_context(
             fresh_spec, st["panels"], st["universe"], "latest")
         still_holds = evaluator.evaluate_symbol(
             panel, fresh_spec, "latest", benchmark=st["benchmark"],
             symbol=entry["symbol"], sector_by_symbol=sector_by_symbol,
-            cross_section=cross_section)
+            cross_section=cross_section, breadth=breadth)
         row.update(
             current_close=round(current_close, 2),
             move_pct=round(100 * (current_close / entry["close_at_tag"]

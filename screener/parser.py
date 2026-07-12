@@ -64,6 +64,13 @@ Additional condition types:
   momentum. Exactly one of top/bottom, never both.
 - {"type":"gap","direction":"up"|"down","min_gap_pct":N,"lookback":N} —
   open vs the prior bar's close, on any bar within the window.
+- {"type":"breadth","direction":"positive"|"negative"} — market-wide
+  regime gate, the SAME value applied to every stock on the as-of date
+  (not a per-stock signal): "positive" means at least 50% of the
+  universe closed above its own 200-day SMA that day, "negative" means
+  fewer than 50%. This is a regime qualifier, not a standalone signal —
+  weak alone, meant to condition other conditions (e.g. "uptrend AND
+  positive breadth").
 
 Allowed SECTOR values (exact strings, use exactly these):
 Automobile and Auto Components, Capital Goods, Chemicals, Construction,
@@ -110,6 +117,11 @@ Canonical vocabulary (ALWAYS use these mappings):
   {"type":"atr_pct_percentile","op":"<=","value":30}
 - "high volatility stocks" / "volatile names" ->
   {"type":"atr_pct_percentile","op":">=","value":70}
+- "positive market breadth" / "broad market strength" / "healthy
+  breadth" / "most stocks above their 200dma" ->
+  {"type":"breadth","direction":"positive"}
+- "negative breadth" / "narrow market" / "weak breadth" / "few stocks
+  participating" -> {"type":"breadth","direction":"negative"}
 - "stage 2" / "Minervini template" / "trend template" -> the full
   conjunction: {"type":"compare","left":"close","op":">","right":"sma_50"},
   {"type":"compare","left":"sma_50","op":">","right":"sma_150"},

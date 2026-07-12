@@ -233,6 +233,17 @@ def cond_sector_rank(panel, c, i, symbol: str | None = None,
     return bool(rank > (n - c["bottom"]))
 
 
+def cond_breadth(panel, c, i, breadth: dict | None = None) -> bool:
+    """Market breadth regime gate — the SAME value for every symbol on a
+    given as_of date (unlike sector_rank/rs_percentile, this ignores
+    `panel`/`i` entirely). `breadth` is `cross_section.compute_breadth()`'s
+    result, computed once per screen, not per symbol."""
+    if breadth is None or breadth.get("pct_above_200dma") is None:
+        return False
+    pct = breadth["pct_above_200dma"]
+    return pct >= 50 if c["direction"] == "positive" else pct < 50
+
+
 DISPATCH = {
     "compare": cond_compare, "proximity": cond_proximity,
     "trend": cond_trend, "support_at_ma": cond_support_at_ma,
@@ -247,7 +258,7 @@ DISPATCH = {
 # (universe metadata / the cross-sectional pre-pass) — dispatched
 # specially in evaluate_symbol/explain_symbol rather than via DISPATCH.
 CROSS_SECTIONAL_TYPES = {"sector", "rs_percentile", "sector_rank",
-                         "atr_pct_percentile"}
+                         "atr_pct_percentile", "breadth"}
 
 # rs_percentile/sector_rank/atr_pct_percentile all key the cross-section
 # cache by window even though atr_pct_percentile's ranking doesn't depend
@@ -314,7 +325,8 @@ def evaluate_symbol(panel: pd.DataFrame, screen: dict,
                     benchmark: pd.Series | None = None,
                     symbol: str | None = None,
                     sector_by_symbol: pd.Series | None = None,
-                    cross_section: dict[int, pd.DataFrame] | None = None
+                    cross_section: dict[int, pd.DataFrame] | None = None,
+                    breadth: dict | None = None
                     ) -> bool:
     from . import indicators
 
@@ -338,6 +350,8 @@ def evaluate_symbol(panel: pd.DataFrame, screen: dict,
         if c["type"] == "sector":
             return cond_sector(panel, c, i, symbol=symbol,
                                sector_by_symbol=sector_by_symbol)
+        if c["type"] == "breadth":
+            return cond_breadth(panel, c, i, breadth=breadth)
         if c["type"] in _CROSS_SECTION_WINDOWED_TYPES:
             cs = (cross_section or {}).get(int(c.get("window", 63)))
             fn = {"rs_percentile": cond_rs_percentile,
@@ -353,9 +367,17 @@ def evaluate_symbol(panel: pd.DataFrame, screen: dict,
 
 def _cross_sectional_context(screen: dict, panels: dict[str, pd.DataFrame],
                              universe: pd.DataFrame | None, as_of):
-    """Sector lookup + the cross-sectional pre-pass, computed once per
-    screen (not per symbol) — the structural change that makes
-    `sector`/`rs_percentile`/`sector_rank` conditions affordable."""
+    """Sector lookup + the cross-sectional pre-pass + market breadth,
+    computed once per screen (not per symbol) — the structural change
+    that makes `sector`/`rs_percentile`/`sector_rank`/`breadth`
+    conditions affordable. Returns (sector_by_symbol, cross_section,
+    breadth) — breadth is a single dict (a screen-wide scalar, not
+    per-symbol/per-window like `cross_section`), None unless a
+    `breadth` condition is actually present."""
+    breadth = None
+    if any(c["type"] == "breadth" for c in screen["conditions"]):
+        from . import cross_section as cs_mod
+        breadth = cs_mod.compute_breadth(panels, as_of)
     sector_by_symbol = (universe.set_index("symbol")["industry"]
                         if universe is not None else None)
     windows = {int(c.get("window", 63)) for c in screen["conditions"]
@@ -366,7 +388,7 @@ def _cross_sectional_context(screen: dict, panels: dict[str, pd.DataFrame],
         cross_section = {w: cs_mod.build_cross_section(panels, universe,
                                                         as_of, w)
                          for w in windows}
-    return sector_by_symbol, cross_section
+    return sector_by_symbol, cross_section, breadth
 
 
 def run_screen(panels: dict[str, pd.DataFrame], screen: dict,
@@ -374,7 +396,7 @@ def run_screen(panels: dict[str, pd.DataFrame], screen: dict,
                min_turnover_cr: float = 0.0,
                benchmark: pd.Series | None = None) -> pd.DataFrame:
     as_of = screen.get("as_of", "latest")
-    sector_by_symbol, cross_section = _cross_sectional_context(
+    sector_by_symbol, cross_section, breadth = _cross_sectional_context(
         screen, panels, universe, as_of)
     rows = []
     for sym, panel in panels.items():
@@ -386,7 +408,7 @@ def run_screen(panels: dict[str, pd.DataFrame], screen: dict,
             continue
         if evaluate_symbol(panel, screen, as_of, benchmark=benchmark,
                            symbol=sym, sector_by_symbol=sector_by_symbol,
-                           cross_section=cross_section):
+                           cross_section=cross_section, breadth=breadth):
             rows.append({
                 "symbol": sym,
                 "close": round(last["close"], 2),

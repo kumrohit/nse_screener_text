@@ -65,7 +65,7 @@ CONDITION_TYPES = {
     "rel_strength",
     "candle", "tight_range", "bb_squeeze", "flat_base",
     "sector", "rs_percentile", "sector_rank", "gap",
-    "atr_pct_percentile",
+    "atr_pct_percentile", "breadth",
 }
 
 # Basis a `rs_percentile` condition ranks stocks by — see LITERATURE.md §1.
@@ -240,6 +240,10 @@ def validate(screen: dict) -> dict:
             if not isinstance(n, int) or n < 1:
                 raise DSLValidationError(
                     "sector_rank top/bottom must be a positive integer")
+        elif ctype == "breadth":
+            if c.get("direction") not in ("positive", "negative"):
+                raise DSLValidationError(
+                    "breadth.direction must be positive/negative")
     return screen
 
 
@@ -367,6 +371,11 @@ def _append_condition(parts: list, c: dict) -> None:
                 parts.append(
                     f"stock's sector in the bottom {c['bottom']} by "
                     f"{w}-bar equal-weight momentum")
+        elif t == "breadth":
+            parts.append(
+                f"market breadth {c['direction']} "
+                f"({'≥' if c['direction'] == 'positive' else '<'}50% of "
+                f"the universe above its 200-day SMA)")
         if c.get("timeframe") == "weekly" and parts:
             parts[-1] += " [weekly]"
 

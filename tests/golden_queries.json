@@ -421,5 +421,23 @@
       "as_of": "latest"
     },
     "note": "Minervini/O'Neil stage-2 trend template (LITERATURE.md \u00a77)"
+  },
+  {
+    "query": "stocks in an uptrend with positive market breadth",
+    "expected": {
+      "logic": "AND",
+      "conditions": [
+        {
+          "type": "trend",
+          "direction": "up"
+        },
+        {
+          "type": "breadth",
+          "direction": "positive"
+        }
+      ],
+      "as_of": "latest"
+    },
+    "note": "market breadth regime gate (LITERATURE.md \u00a79) \u2014 a regime qualifier, not a standalone signal"
   }
 ]

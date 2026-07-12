@@ -279,6 +279,7 @@ python -m screener.cli screen --universe nse_full "oversold stocks near their 52
 | "12-1 momentum" / "momentum leaders" | 12-month return with the most recent month excluded, ranked as a percentile (Jegadeesh-Titman skip-month construction) |
 | "low volatility stocks" / "high volatility stocks" | ATR% ranked as a percentile across the universe, bottom/top tercile |
 | "stage 2" / "Minervini template" | the full practitioner trend template — see [LITERATURE.md §7](LITERATURE.md) |
+| "positive market breadth" / "broad market strength" | ≥50% of the universe closed above its own 200-day SMA — a regime gate, same value for every stock (see [LITERATURE.md §9](LITERATURE.md)) |
 | "up 10% in a month", "between 40 and 60" | explicit numbers pass straight through |
 
 Anything it can't map to the documented vocabulary — P/E ratios, news, "good management" — returns an explicit error instead of a silently wrong screen.
@@ -303,7 +304,7 @@ Unknown keys are flagged and ignored rather than silently doing nothing. The eff
 ## Tests
 
 ```bash
-python -m pytest tests/                    # 323 tests: synthetic series with known answers,
+python -m pytest tests/                    # 334 tests: synthetic series with known answers,
                                            # evidence-layer agreement, web API contract,
                                            # allocation-engine invariants, backtester
                                            # methodology (event dedup, entry convention,
@@ -312,10 +313,12 @@ python -m pytest tests/                    # 323 tests: synthetic series with kn
                                            # tracker (adjustment invariance, milestone
                                            # freezing, baseline parity, scorecard),
                                            # cohort replay & performance engine (mode
-                                           # wall, hand-computed metrics, Sharpe gate)
+                                           # wall, hand-computed metrics, Sharpe gate),
+                                           # market breadth (hand-computed regime
+                                           # gate, exact vectorizer consistency)
 cd web/visual && npm test                  # visual regression: 6 baseline screenshots
                                            # against a live demo-mode server (see below)
-python -m tests.golden_harness             # live parser scoring vs 23 hand-verified queries
+python -m tests.golden_harness             # live parser scoring vs 24 hand-verified queries
 ```
 
 CI runs the offline suite on every push. The live harness gates any change to the parser prompt: N/N or it doesn't ship (also runnable as a manual GitHub Actions job — `.github/workflows/golden-harness.yml`). The visual suite needs a real running server in **demo mode** for deterministic screenshots — `SCREENER_FORCE_DEMO=1 python -m screener.webapp` in one terminal, `cd web/visual && npm install && npx playwright install chromium && npm test` in another; `npm run update` regenerates the committed baseline after an intentional UI change.

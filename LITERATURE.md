@@ -345,6 +345,53 @@ historically carry edge" the blocking question).
 
 ---
 
+## 9. Market breadth (regime context)
+
+**Basis:** practitioner, weak/unvalidated as a standalone signal — a
+market-internals gauge, not a per-stock predictor.
+
+**What it is.** The percentage of the universe trading above its own
+200-day moving average, and the percentage making a new 20-trading-day
+high on a given date — standard "market internals" constructions long
+used by technical practitioners to gauge whether an index's advance is
+broad (many stocks participating) or narrow (a handful of large names
+carrying the index while the median stock lags). The specific idea that
+a sharp, broad expansion in the number of stocks above their long-term
+average moving average ("breadth thrust") can mark the start of a durable
+rally is closely associated with Martin Zweig's technical-analysis work;
+"percentage of stocks above the 200-day moving average" is itself a
+widely published market-internals series (tracked by most major index
+providers and charting platforms) rather than a proprietary construction.
+
+**Why this is "regime context," not a screening edge.** This project
+found no controlled academic study establishing that this screener's
+specific two-field construction (`pct_above_200dma`, `pct_at_20d_high`)
+predicts forward index or cross-sectional stock returns with a
+quantified effect size — unlike family #1's momentum or family #2's
+52-week-high anchoring, both of which cite replicated academic results.
+Breadth here is offered as a **regime qualifier that conditions other
+conditions** ("uptrend AND positive breadth" reads as "this stock's own
+setup, in a market environment where the average stock agrees"), not as
+a standalone filter with its own claimed edge — weak alone, by design,
+and the `breadth` condition's own plain-English description says so.
+
+**No India-specific evidence located.** This review did not locate a
+published India-market breadth study; the construction is applied here
+on the (unverified) assumption that a universe-relative internals gauge
+generalises across markets, same caution already applied to family #6's
+low-volatility anomaly.
+
+**DSL mapping.** `{"type":"breadth","direction":"positive"|"negative"}`
+— `screener.cross_section.compute_breadth()` (as-of screens) /
+`screener.backtest.compute_breadth_series()` (backtests), fixed 50%
+threshold on `pct_above_200dma` (not a tunable parameter — the whole
+family is scoped to this one canonical definition, matching the
+project's existing `trend` condition's fixed-canonical-definition
+precedent rather than adding a configurable threshold this review can't
+justify with evidence either way).
+
+---
+
 ## Annotation policy for the 11 remaining existing presets
 
 Not every existing preset maps to one of the eight families above by
