@@ -179,49 +179,19 @@ closes.
 
 ---
 
-## SEQUENCING — updated 2026-07-12 (post-v0.15)
+## SEQUENCING — updated 2026-07-12 evening (post-v0.16)
 
-**Items 16 and 17 are DONE — the tool is feature-complete for the
-current arc.** What remains is evidence generation and the calendar.
+**Done this weekend:** Items 16, 17, breadth fields (§C), two-tier
+deletion guard, weekend-proof suite. Forward cohorts aging since 07-11.
 
-**Cohort seeding — DONE.** All 8 forward cohorts (support_50ema_uptrend,
-momentum_12_1_leaders, minervini_stage2, flat_base_52w × nifty500 and
-nse_full) were seeded 2026-07-11, the same day Item 16 shipped. 5-bar
-milestones mature before the 07-19 cutover; 20-bar lands with the
-first evidence review (~2 weeks out). **Replay cohorts — DONE
-2026-07-12**: 16 more (the same 4 presets × 2 universes × −3m/−6m
-as-of dates, 2026-04-10 and 2026-01-10) give immediate Item-17
-performance panels rather than waiting on the forward ones to age —
-all `completed` already (3-6 months of history exists), so the first
-replay-vs-forward comparison for a given preset/universe pair is
-available today, not in two weeks. Match counts ranged 8-256 depending
-on preset/universe/date (`flat_base_52w` is the tightest filter, `-6m`
-on `nse_full`'s wider `momentum_12_1_leaders` the loosest).
+**Remaining to v1.0:** (1) Rohit: hypotheses doc → comparison run
+session (the other half of Session 2); (2) 2026-07-19 cutover chain;
+(3) 15-B membership (archaeology-gated); (4) sidebar; (5) Item 18
+hardening trio (backup, schema versioning, docs pass). Then TAG v1.0.
 
-**Session 2 — breadth fields DONE 2026-07-12; the comparison run still
-blocked.** Market-breadth regime fields shipped standalone (see status
-snapshot) rather than waiting on the comparison they were originally
-paired with. The nifty500-vs-nse_full strategy-preset backtest
-comparison itself is still gated: **prerequisite from Rohit BEFORE the
-run: pre-registered hypotheses per preset per universe**, drawn from
-LITERATURE.md effect sizes (the momentum-strengthens-in-breadth
-prediction is the headline one). This run also produces the IS numbers
-that close the deferred backtest evidence loop.
-
-**Rohit's own tasks this week (no Claude Code needed):**
-- Nightly cron (if not yet live) — cohort milestones and the
-  cross-source check both want unattended daily data.
-- Membership archaeology hour (gates Item 15-B's scope decision).
-- Write the session-2 hypotheses before session 2 runs.
-
-**2026-07-19 (7 days out): cutover chain session** — if cross-source
-check clean: config flip, yfinance to fallback, `delivery` condition +
-accumulation preset, risk log. Delivery-based presets get cohort-seeded
-the same day (their OOS clock starts latest, so no reason to add delay).
-
-**AFTER:** Item 15-B membership build (scope per archaeology); v0.11
-sidebar anytime; first cohort scorecard review ~2 weeks after seeding;
-the replay-vs-forward comparison above once forward milestones exist.
+**After the tag:** Item 18 post-1.0 tracks, T1 (evidence protocol)
+first — retirement/promotion rules must exist before the first
+scorecard review (~2026-07-25), not after.
 
 ---
 
@@ -1238,6 +1208,76 @@ helper) — this is an extension, not a fork.
 - [x] Adjustment invariance holds for replay windows (reuse the
       halving test at a historical as_of).
 - [x] Old cohort records (pre-mode) readable, default forward.
+
+## 18. v1.0 milestone + post-1.0 horizon (planned 2026-07-12)
+
+### The v1.0 gate — "done" for the current arc
+
+Tag v1.0 when ALL of: cutover chain complete (Item 2); the
+nifty500-vs-nse_full comparison run executed with pre-registered
+hypotheses and preset evidence loop closed (IS numbers in); Item 15-B
+membership shipped at whatever coverage the archaeology supports;
+v0.11 sidebar landed; and the three v1.0-hardening items below. v1.0
+is a statement: the *engine* is finished; what grows after is
+evidence, process, and analysis layers on top.
+
+### v1.0 hardening (small, do before the tag)
+
+- [ ] **Data backup discipline** — cohorts.jsonl + screen_log.jsonl +
+      membership.csv are now irreplaceable evidence (prices re-download;
+      evidence doesn't). Nightly cron gains a versioned local backup
+      (rotate 30) + a documented off-machine copy step. A verify check
+      confirms the latest backup exists and parses.
+- [ ] **Schema versioning** — cohort records and log entries have
+      evolved across v0.14-0.15.2 with default-on-read patches scattered
+      at call sites; add `schema_version` to new records and one
+      `migrate_record()` per store so the next format change is a
+      function, not archaeology.
+- [ ] **Docs completeness pass** — TECHNICAL_DESIGN sections for
+      cohorts/replay/deletion tiers/breadth (currently changelog-only);
+      README feature map refresh; LITERATURE.md gains the evidence
+      loop-closure numbers when the comparison run lands.
+
+### Post-1.0 tracks (directional — full spec written when picked up)
+
+- [ ] **T1. Evidence protocol (process, not code — highest value).**
+      EVIDENCE_PROTOCOL.md codifying the lifecycle of a filter:
+      pre-registration required before any backtest; retirement rule
+      decided NOW, before results exist (e.g. after ≥6 forward cohorts
+      AND ≥90 days: OOS mean excess < 0 OR hit rate < 45% → preset
+      moves to an "archived" group with the record attached);
+      promotion rule (what OOS evidence qualifies a filter as an entry
+      trigger for the full momentum system); weekly scorecard review
+      ritual. Small code support: archived preset group + protocol
+      fields on the evidence object.
+- [ ] **T2. Regime-conditional backtests.** Breadth fields exist —
+      extend the backtester to split every report by regime at signal
+      time (breadth positive/negative, optionally trend of Nifty):
+      "support-at-50EMA carries +1.4% excess in positive breadth,
+      −0.3% in negative" is the analysis layer the regime fields were
+      built for. Cheap on existing machinery; sensitivity-grid-style
+      output with the same small-N suppression.
+- [ ] **T3. Daily signal digest.** Cron-driven: after nightly
+      update+verify, diff saved screens (spec-hash machinery exists),
+      collect new entrants + cohort milestones reached + breadth
+      regime flips, send one Telegram/email digest. Read-only, no
+      execution. Prior art exists (funding-arb Telegram alerter).
+- [ ] **T4. Order-basket export (bridge, not execution).** From an
+      allocation result: broker-importable basket CSV (Zerodha/Upstox
+      formats), with the sizing rationale embedded as comments where
+      the format allows. Explicitly NOT auto-execution — the tool's
+      no-execution line stays.
+- [ ] **T5. Cross-screen portfolio lens.** Aggregate view over active
+      cohorts/allocations: symbol overlap ("RELIANCE appears in 3 of
+      your 5 tracked screens"), combined sector exposure vs caps,
+      total capital-if-all-followed. Concentration risk made visible
+      before it's taken.
+- [ ] **T6 (standing deferrals).** Separate asset-class engines (FX/
+      crypto — Rohit's stated later goal), intraday, fundamentals,
+      nested boolean logic: unchanged, revisit on concrete need.
+
+Suggested order: hardening → tag v1.0 → T1 (before more evidence
+accumulates under undefined rules) → T2 → T3 → T4/T5 by appetite.
 
 ## 12. Recurring operations (not one-time)
 
