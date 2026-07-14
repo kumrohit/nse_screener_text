@@ -86,6 +86,17 @@ STATUS_DELETED = "deleted"     # tombstone — hidden from views, counted
 MODE_FORWARD = "forward"
 MODE_REPLAY = "replay"
 
+# Schema versioning (ROADMAP Item 18 v1.0 hardening). 1: pre-Item-17
+# records (no mode/as_of — the only field this schema has ever gained
+# that old records don't already have; v0.15.2's tombstone fields
+# (status="deleted", deleted_ts, delete_reason) are purely additive —
+# a status value that didn't exist before isn't a migration, it's just
+# a status old records will never happen to have — so no version bump
+# was needed for that change). The next format change is a new `if
+# version < N` block in migrate_record(), not a new .setdefault()
+# scattered at another read site.
+SCHEMA_VERSION = 2
+
 REPLAY_SURVIVORSHIP_NOTE = (
     "Replay cohort: created as of a historical date with all later data "
     "already visible — in-sample by construction, like the backtester, "
@@ -105,6 +116,18 @@ SURVIVORSHIP_FREE_NOTE = (
 )
 
 
+def migrate_record(c: dict) -> dict:
+    """Bring one cohort record up to SCHEMA_VERSION, in place, and
+    return it. Idempotent — calling this on an already-current record
+    is a no-op beyond re-stamping the version number it already had."""
+    version = c.get("schema_version", 1)
+    if version < 2:
+        c.setdefault("mode", MODE_FORWARD)
+        c.setdefault("as_of", None)
+    c["schema_version"] = SCHEMA_VERSION
+    return c
+
+
 # ------------------------------------------------------------ storage
 def _load_all(universe_id: str) -> list[dict]:
     f = config.cohorts_file(universe_id)
@@ -112,13 +135,19 @@ def _load_all(universe_id: str) -> list[dict]:
         return []
     cohorts = [_json.loads(line) for line in f.read_text().strip().splitlines()
               if line]
+    # migrate in place and persist if anything actually changed — same
+    # before/after diff-and-write pattern list_cohorts() already uses
+    # for refresh_cohort(), so a migrated record is written back to
+    # disk on its first read rather than re-migrated (cheap, but never
+    # actually landing) on every single subsequent read forever.
+    migrated = False
     for c in cohorts:
-        # ROADMAP Item 17: records written before replay mode existed
-        # have no `mode`/`as_of` fields — default them on read (same
-        # pattern as screen_log's `universe` backfill) rather than
-        # migrating the file, so every reader can assume both exist.
-        c.setdefault("mode", MODE_FORWARD)
-        c.setdefault("as_of", None)
+        before = _json.dumps(c, sort_keys=True)
+        migrate_record(c)
+        if _json.dumps(c, sort_keys=True) != before:
+            migrated = True
+    if migrated:
+        _save_all(universe_id, cohorts)
     return cohorts
 
 
@@ -437,6 +466,7 @@ def create_cohort(*, universe_id: str, spec: dict, symbols: list[str],
         "milestones": {str(h): None for h in HORIZONS},
         "mode": mode,
         "as_of": resolved_as_of,
+        "schema_version": SCHEMA_VERSION,
     }
     cohorts = _load_all(universe_id)
     cohorts.append(cohort)

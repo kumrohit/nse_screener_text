@@ -86,10 +86,29 @@ def cmd_verify(args) -> None:
                 if LOG_FILE.exists() else None)
     rotated_lines = (ROTATED_LOG_FILE.read_text().strip().splitlines()
                      if ROTATED_LOG_FILE.exists() else None)
+    from . import backup as backup_mod
+    backup_info = backup_mod.verify_latest_backup()
     results = verify.verify_store(
         prices, uni, data_ingest.load_benchmark(universe_id), panels,
-        bhav_prices, log_lines, rotated_lines)
+        bhav_prices, log_lines, rotated_lines, backup_info)
     _sys.exit(verify.print_report(results))
+
+
+def cmd_backup(_args) -> None:
+    """Versioned local snapshot of irreplaceable evidence — cohort
+    records, screen/allocation/backtest logs, watchlist, saved presets
+    (ROADMAP Item 18 v1.0 hardening). Meant to run nightly alongside
+    `update && verify`; does NOT touch prices/universe/benchmark
+    (re-downloadable via `backfill`, not evidence). Rotates to the 30
+    most recent snapshots. See README's Operations section for the
+    off-machine copy step this doesn't automate."""
+    from . import backup
+    dest = backup.create_backup()
+    removed = backup.rotate_backups()
+    print(f"Backed up to {dest}")
+    if removed:
+        print(f"Rotated out {len(removed)} snapshot(s) beyond the "
+             f"{backup.KEEP}-backup retention window")
 
 
 def cmd_bhavcopy_update(_args) -> None:
@@ -290,15 +309,13 @@ def cmd_cohort_create(args) -> None:
             sys.exit("--symbols needs --preset or --json to supply the spec")
         symbols = args.symbols
     else:
-        from .webapp import LOG_FILE
+        from .webapp import LOG_FILE, migrate_screen_log_entry
         if not LOG_FILE.exists():
             sys.exit("No screens logged yet. Run `screen` first, or pass "
                      "--symbols with --preset/--json.")
-        entries = [json.loads(l) for l in
+        entries = [migrate_screen_log_entry(json.loads(l)) for l in
                   LOG_FILE.read_text().strip().splitlines() if l]
-        matches = [e for e in entries
-                  if e.get("universe", universes.DEFAULT_UNIVERSE)
-                  == universe_id]
+        matches = [e for e in entries if e["universe"] == universe_id]
         if not matches:
             sys.exit(f"No logged screens for universe {universe_id!r}. Run "
                      f"`screen --universe {universe_id}` first.")
@@ -459,10 +476,10 @@ def cmd_scorecard(args) -> None:
 
     prices = _load_prices(universe_id)
     panels = indicators.build_panels(prices)
-    from .webapp import BACKTEST_LOG_FILE
+    from .webapp import BACKTEST_LOG_FILE, migrate_backtest_log_entry
     log_entries = []
     if BACKTEST_LOG_FILE.exists():
-        log_entries = [json.loads(l) for l in
+        log_entries = [migrate_backtest_log_entry(json.loads(l)) for l in
                        BACKTEST_LOG_FILE.read_text().strip().splitlines()
                        if l]
     sc = cohorts_mod.scorecard(
@@ -530,6 +547,11 @@ def main() -> None:
                          "smell test, with split-ratio hints")
     _add_universe_arg(vf)
     vf.set_defaults(func=cmd_verify)
+
+    sub.add_parser("backup", help="versioned local snapshot of cohort/"
+                   "screen/allocation/backtest logs and saved presets "
+                   "— irreplaceable evidence (ROADMAP Item 18)"
+                   ).set_defaults(func=cmd_backup)
 
     lg = sub.add_parser("log", help="recent screen runs (replay trail)")
     lg.add_argument("--tail", type=int, default=10)

@@ -502,6 +502,22 @@ class BacktestIn(BaseModel):
 
 BACKTEST_LOG_FILE = config.DATA_DIR / "backtest_log.jsonl"
 
+# Schema versioning (ROADMAP Item 18 v1.0 hardening). 1: pre-Item-16
+# entries (no `universe` field — unlike screen_log's equivalent gap,
+# nothing ever defaulted this one on read; cohorts.scorecard()'s IS
+# lookup just compared `e.get("universe")` directly, so a pre-Item-16
+# entry silently matched nothing rather than being treated as
+# nifty500. Same fix as screen_log's migration, applied here too.
+BACKTEST_LOG_SCHEMA_VERSION = 2
+
+
+def migrate_backtest_log_entry(e: dict) -> dict:
+    version = e.get("schema_version", 1)
+    if version < 2:
+        e.setdefault("universe", universes.DEFAULT_UNIVERSE)
+    e["schema_version"] = BACKTEST_LOG_SCHEMA_VERSION
+    return e
+
 
 def _log_backtest(body: "BacktestIn", result: dict,
                   universe_id: str = universes.DEFAULT_UNIVERSE) -> None:
@@ -532,6 +548,7 @@ def _log_backtest(body: "BacktestIn", result: dict,
                 "n_events_total": result["n_events_total"],
                 "horizons": result["horizons"],
                 "config_hash": config.config_hash(),
+                "schema_version": BACKTEST_LOG_SCHEMA_VERSION,
             }) + "\n")
     except OSError:
         pass  # logging must never break a backtest response
@@ -672,7 +689,7 @@ def scorecard_endpoint(spec_hash: str):
     log_entries = []
     if BACKTEST_LOG_FILE.exists():
         import json as _json
-        log_entries = [_json.loads(l) for l in
+        log_entries = [migrate_backtest_log_entry(_json.loads(l)) for l in
                        BACKTEST_LOG_FILE.read_text().strip().splitlines()
                        if l]
     return cohorts_mod.scorecard(
@@ -898,6 +915,26 @@ LOG_FILE = config.DATA_DIR / "screen_log.jsonl"
 ROTATED_LOG_FILE = config.DATA_DIR / "screen_log.rotated.jsonl"
 MAX_LOG_LINES = 5000
 
+# Schema versioning (ROADMAP Item 18 v1.0 hardening). 1: pre-Item-15
+# entries (no `universe` field). The next format change is a new
+# `if version < N` block here, not a new .setdefault() at another
+# read site — screen_log is read from webapp's own /api/log endpoint
+# and from cli.py's verify/log/cohort-create commands, and before this
+# only the webapp endpoint actually defaulted the field; cli.py's own
+# `--from-last-screen` path compared `e.get("universe")` directly,
+# which silently treated a pre-Item-15 entry as belonging to no
+# universe rather than nifty500 — a real, if minor, inconsistency this
+# migration function closes by being the one place both callers use.
+SCREEN_LOG_SCHEMA_VERSION = 2
+
+
+def migrate_screen_log_entry(e: dict) -> dict:
+    version = e.get("schema_version", 1)
+    if version < 2:
+        e.setdefault("universe", universes.DEFAULT_UNIVERSE)
+    e["schema_version"] = SCREEN_LOG_SCHEMA_VERSION
+    return e
+
 
 def _rotate_log_if_needed() -> None:
     """Size-capped rotation: once the active log exceeds MAX_LOG_LINES,
@@ -954,6 +991,7 @@ def _log_run(spec: dict, as_of: str, stats: dict, matches: list,
                 "stats": stats, "config_hash": config.config_hash(),
                 "spec_hash": spec_h, "universe": universe_id,
                 "matched": [m["symbol"] for m in matches],
+                "schema_version": SCREEN_LOG_SCHEMA_VERSION,
             }) + "\n")
         _rotate_log_if_needed()
     except OSError:
@@ -966,10 +1004,7 @@ def screen_log(limit: int = 20):
     if not LOG_FILE.exists():
         return []
     lines = LOG_FILE.read_text().strip().splitlines()[-limit:]
-    entries = [_json.loads(l) for l in reversed(lines)]
-    for e in entries:
-        e.setdefault("universe", universes.DEFAULT_UNIVERSE)
-    return entries
+    return [migrate_screen_log_entry(_json.loads(l)) for l in reversed(lines)]
 
 
 # ---------------------------------------------------------------- watchlist

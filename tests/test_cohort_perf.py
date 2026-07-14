@@ -127,6 +127,29 @@ class TestReplayMode:
         loaded = cohorts._load_all("u")
         assert loaded[0]["mode"] == cohorts.MODE_FORWARD
         assert loaded[0]["as_of"] is None
+        # migration also stamps the record current, in the persisted
+        # file itself — not just in the in-memory return value — so
+        # the next load doesn't redo the same migration work
+        assert loaded[0]["schema_version"] == cohorts.SCHEMA_VERSION
+        on_disk = json.loads(f.read_text().strip())
+        assert on_disk["schema_version"] == cohorts.SCHEMA_VERSION
+        assert on_disk["mode"] == cohorts.MODE_FORWARD
+
+    def test_new_cohorts_are_stamped_current_at_creation(self, tmp_data_dir):
+        c = cohorts.create_cohort(universe_id="u", spec=SPEC,
+                                  symbols=["SYM0"],
+                                  weights=cohorts.weights_from_symbols(
+                                      ["SYM0"]))
+        assert c["schema_version"] == cohorts.SCHEMA_VERSION
+
+    def test_migrate_record_is_idempotent(self, tmp_data_dir):
+        c = cohorts.create_cohort(universe_id="u", spec=SPEC,
+                                  symbols=["SYM0"],
+                                  weights=cohorts.weights_from_symbols(
+                                      ["SYM0"]))
+        once = cohorts.migrate_record(dict(c))
+        twice = cohorts.migrate_record(dict(once))
+        assert once == twice
 
 
 class TestScorecardWall:

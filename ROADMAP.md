@@ -1223,20 +1223,35 @@ evidence, process, and analysis layers on top.
 
 ### v1.0 hardening (small, do before the tag)
 
-- [ ] **Data backup discipline** — cohorts.jsonl + screen_log.jsonl +
-      membership.csv are now irreplaceable evidence (prices re-download;
-      evidence doesn't). Nightly cron gains a versioned local backup
-      (rotate 30) + a documented off-machine copy step. A verify check
-      confirms the latest backup exists and parses.
-- [ ] **Schema versioning** — cohort records and log entries have
-      evolved across v0.14-0.15.2 with default-on-read patches scattered
-      at call sites; add `schema_version` to new records and one
-      `migrate_record()` per store so the next format change is a
-      function, not archaeology.
-- [ ] **Docs completeness pass** — TECHNICAL_DESIGN sections for
-      cohorts/replay/deletion tiers/breadth (currently changelog-only);
-      README feature map refresh; LITERATURE.md gains the evidence
-      loop-closure numbers when the comparison run lands.
+- [x] **Data backup discipline** (v0.16.1, §12k) — `screener/backup.py`
+      snapshots cohorts.jsonl (all universes) + screen/allocation/backtest
+      logs + watchlist + saved presets into `data/backups/<ts>/`, rotated
+      to 30. Nightly cron documented as `update && verify && backup`; the
+      off-machine copy is a documented manual step (rclone/rsync/cloud
+      sync), not automated — see README and TECHNICAL_DESIGN §11/§12k. A
+      `verify` check confirms the latest backup exists and every file in
+      it parses (WARN if missing, FAIL if corrupted). membership.csv does
+      not yet exist as a store (Item 15-B is unshipped) — nothing to back
+      up there yet; revisit when it lands.
+- [x] **Schema versioning** (v0.16.1, §12k) — `SCHEMA_VERSION` +
+      `migrate_record()` added to `cohorts.py` (mode/as_of) and to
+      `webapp.py`'s screen log and backtest log (`universe` field),
+      consolidating scattered inline `.setdefault()` defaulting into one
+      migration function per store, applied at every read site that
+      consumes the field. `cohorts._load_all()` migrates *and persists*
+      the change back to disk (caught in testing: an earlier draft only
+      migrated in memory, so old records would have re-migrated forever
+      without ever actually landing). `allocation_log.jsonl`/
+      `watchlist.jsonl` deliberately left unversioned — neither has ever
+      changed shape.
+- [x] **Docs completeness pass** (v0.16.1, §12k) — narrower than this
+      item assumed: independent re-read found §12h/§12i/§12j (cohorts,
+      replay, deletion tiers, breadth) already had substantial dedicated
+      prose, not "changelog-only." Added: §12k itself, §11's check-count
+      and cron-line refresh, README's nightly-cron/backup-CLI/test-count
+      updates. LITERATURE.md's evidence loop-closure numbers correctly
+      stay deferred — not actionable until the nifty500-vs-nse_full
+      comparison run lands (blocked on pre-registered hypotheses).
 
 ### Post-1.0 tracks (directional — full spec written when picked up)
 

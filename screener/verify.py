@@ -103,12 +103,32 @@ def check_screen_log(log_lines: list[str] | None,
     return ("screen log", PASS, detail)
 
 
+def check_backup(backup_info: dict) -> tuple[str, str, str]:
+    """One verify-report row for the latest evidence backup (ROADMAP
+    Item 18 v1.0 hardening) — confirms a recent snapshot exists and its
+    JSONL files parse. Doesn't check the snapshot's CONTENTS match the
+    live stores (create_backup() making a byte-for-byte copy already
+    guarantees that by construction) or how old it is beyond an
+    informational note — a strict staleness FAIL wasn't asked for and
+    would invent a threshold this check has no basis to pick."""
+    if not backup_info["exists"]:
+        return ("evidence backup", WARN,
+                "no backup yet — run `python -m screener.cli backup`")
+    if backup_info["bad_files"]:
+        return ("evidence backup", FAIL,
+                f"{backup_info['path']}: unparseable file(s): "
+                f"{', '.join(backup_info['bad_files'])}")
+    return ("evidence backup", PASS,
+            f"latest snapshot: {backup_info['path']}")
+
+
 def verify_store(prices: pd.DataFrame, universe: pd.DataFrame,
                  benchmark: pd.Series | None,
                  panels: dict[str, pd.DataFrame] | None = None,
                  bhav_prices: pd.DataFrame | None = None,
                  screen_log_lines: list[str] | None = None,
-                 screen_log_rotated_lines: list[str] | None = None
+                 screen_log_rotated_lines: list[str] | None = None,
+                 backup_info: dict | None = None
                  ) -> list[tuple[str, str, str]]:
     """[(check_name, status, detail), ...]"""
     r: list[tuple[str, str, str]] = []
@@ -214,6 +234,8 @@ def verify_store(prices: pd.DataFrame, universe: pd.DataFrame,
     # -- data layer v2 side-by-side evidence (Item 3, pre-cutover) ----
     r.append(check_cross_source(prices, bhav_prices))
     r.append(check_screen_log(screen_log_lines, screen_log_rotated_lines))
+    if backup_info is not None:
+        r.append(check_backup(backup_info))
     return r
 
 

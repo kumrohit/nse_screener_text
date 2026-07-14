@@ -9,6 +9,9 @@ data/config_local.toml
 data/*/*.parquet
 data/*/*.csv
 data/*/*.jsonl
+# versioned evidence backups (ROADMAP Item 18 v1.0 hardening) — local
+# only, rotated to 30; the off-machine copy is a manual step, not this
+data/backups/
 
 # python
 __pycache__/

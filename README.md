@@ -47,8 +47,16 @@ labelled 11-stock demo universe so you can explore the interface first.
 Keep it fresh with a nightly job (after 18:30 IST, once NSE close data settles):
 
 ```bash
-python -m screener.cli update
+python -m screener.cli update && python -m screener.cli verify && python -m screener.cli backup
 ```
+
+`backup` snapshots the irreplaceable evidence — cohort records, screen/allocation/backtest
+logs, watchlist, saved presets — into a timestamped `data/backups/<ts>/` directory (prices and
+the universe list are excluded; `backfill` regenerates those, so they aren't evidence). It
+rotates to the 30 most recent snapshots automatically. This is a *local* copy on the same disk
+as the data it's backing up — periodically sync `data/backups/` off-machine too (`rclone`,
+`rsync` to another host, or a cloud-synced folder), since a local-only backup doesn't survive
+a disk failure.
 
 ## First live run (checklist)
 
@@ -60,10 +68,12 @@ python -m screener.cli verify       # automated data health report
 python -m screener.webapp           # then open http://127.0.0.1:8501
 ```
 
-`verify` runs 11 checks — symbol coverage vs the index list, freshness,
+`verify` runs 14 checks — symbol coverage vs the index list, freshness,
 history depth, bar integrity, duplicates, a corporate-action "smell test",
-benchmark presence, and indicator spot checks — and exits non-zero on any
-FAIL so it can gate a cron pipeline (`... update && ... verify && ...`).
+benchmark presence, indicator spot checks, the bhavcopy cross-source check,
+screen-log JSONL integrity, and evidence-backup existence/parseability — and
+exits non-zero on any FAIL so it can gate a cron pipeline
+(`... update && ... verify && ...`).
 
 ## Web UI
 
@@ -250,6 +260,10 @@ python -m screener.cli cohort delete <cohort_id> --reason "mis-tracked screen"  
 python -m screener.cli backfill --universe nse_full     # ~15 min, 2,047 symbols
 python -m screener.cli backfill --universe nse_etf      # <1 min, 36 curated ETFs
 python -m screener.cli screen --universe nse_full "oversold stocks near their 52 week low"
+
+# evidence backup: snapshot cohorts/logs/watchlist/presets, rotated to 30
+python -m screener.cli backup
+python -m screener.cli verify --universe nifty500       # includes an evidence-backup check
 ```
 
 ## What it understands
@@ -304,7 +318,7 @@ Unknown keys are flagged and ignored rather than silently doing nothing. The eff
 ## Tests
 
 ```bash
-python -m pytest tests/                    # 334 tests: synthetic series with known answers,
+python -m pytest tests/                    # 354 tests: synthetic series with known answers,
                                            # evidence-layer agreement, web API contract,
                                            # allocation-engine invariants, backtester
                                            # methodology (event dedup, entry convention,
@@ -315,7 +329,9 @@ python -m pytest tests/                    # 334 tests: synthetic series with kn
                                            # cohort replay & performance engine (mode
                                            # wall, hand-computed metrics, Sharpe gate),
                                            # market breadth (hand-computed regime
-                                           # gate, exact vectorizer consistency)
+                                           # gate, exact vectorizer consistency), evidence
+                                           # backup (rotation, corruption detection),
+                                           # schema versioning (migrate-and-persist)
 cd web/visual && npm test                  # visual regression: 6 baseline screenshots
                                            # against a live demo-mode server (see below)
 python -m tests.golden_harness             # live parser scoring vs 24 hand-verified queries

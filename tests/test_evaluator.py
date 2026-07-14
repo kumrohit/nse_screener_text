@@ -295,6 +295,47 @@ class TestRelStrength:
             evaluate_symbol(p, spec)
 
 
+class TestLogSchemaVersioning:
+    """ROADMAP Item 18 v1.0 hardening: screen_log/backtest_log entries
+    gained a `universe` field at different points (Item 15, Item 16)
+    via scattered .setdefault()/`.get(default=...)` calls at different
+    read sites — migrate_screen_log_entry()/migrate_backtest_log_entry()
+    centralise that into one function per store."""
+
+    def test_migrate_screen_log_entry_defaults_universe(self):
+        from screener import webapp
+        legacy = {"ts": "x", "spec": {}, "matched": []}
+        migrated = webapp.migrate_screen_log_entry(dict(legacy))
+        assert migrated["universe"] == "nifty500"
+        assert migrated["schema_version"] == \
+            webapp.SCREEN_LOG_SCHEMA_VERSION
+
+    def test_migrate_screen_log_entry_preserves_explicit_universe(self):
+        from screener import webapp
+        entry = {"ts": "x", "universe": "nse_full"}
+        migrated = webapp.migrate_screen_log_entry(dict(entry))
+        assert migrated["universe"] == "nse_full"
+
+    def test_migrate_backtest_log_entry_defaults_universe(self):
+        from screener import webapp
+        legacy = {"ts": "x", "spec_hash": "abc"}
+        migrated = webapp.migrate_backtest_log_entry(dict(legacy))
+        assert migrated["universe"] == "nifty500"
+        assert migrated["schema_version"] == \
+            webapp.BACKTEST_LOG_SCHEMA_VERSION
+
+    def test_new_screen_log_entries_are_stamped_current(
+            self, tmp_path, monkeypatch):
+        import json as _json
+        from screener import webapp
+        monkeypatch.setattr(webapp, "LOG_FILE",
+                            tmp_path / "screen_log.jsonl")
+        webapp._log_run({"conditions": []}, "latest", {"matched": 0},
+                        [], "hash1", "nifty500")
+        entry = _json.loads(webapp.LOG_FILE.read_text().strip())
+        assert entry["schema_version"] == webapp.SCREEN_LOG_SCHEMA_VERSION
+
+
 class TestGoldenOffline:
     def test_all_expected_specs_valid(self):
         for case in load_fixtures():
