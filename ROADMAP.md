@@ -1294,6 +1294,111 @@ evidence, process, and analysis layers on top.
 Suggested order: hardening → tag v1.0 → T1 (before more evidence
 accumulates under undefined rules) → T2 → T3 → T4/T5 by appetite.
 
+## 19. Link (2003) practitioner screens (v0.17) — High Probability Trading
+
+Source: Marcel Link, *High Probability Trading*, McGraw-Hill 2003 —
+reviewed in full 2026-07-13 (chat session; chapter-end rule lists +
+Ch. 10 composite). Every preset here is `basis: practitioner`,
+`source: Link (2003)` with honest caveats, and earns nothing until it
+survives the same backtest + cohort gauntlet as the academic presets.
+LITERATURE.md gains a cited section — concepts paraphrased in our own
+words, never passages.
+
+### Engine additions
+
+- [ ] **Stochastics (slow, 14-3-3)** — panel fields `stoch_k`, `stoch_d`:
+      raw %K = 100·(close − LL14)/(HH14 − LL14); slow %K = SMA3(raw);
+      %D = SMA3(slow %K). HH14=LL14 (zero range) ⇒ NaN, fails closed.
+      Hand-checked test against a worked example. `cross` on
+      stoch_k/stoch_d works free once the fields exist.
+- [ ] **`adx_slope`** — 5-bar diff, same pattern as EMA slopes (Link:
+      rising ADX = strengthening trend; his thresholds 30/20 vs our
+      canonical 25 — presets below use HIS numbers, tagged as such).
+- [ ] Both fields added to KNOWN_FIELDS, weekly panel excluded (daily
+      only, v1), sparkline plottable-set updated for stoch bands? No —
+      oscillators don't overlay price; skip.
+
+### New condition types (exact formulas — the DSL contract)
+
+- [ ] **`threshold_cross`** —
+      {"type":"threshold_cross","field":F,"level":N,
+       "direction":"above"|"below","lookback":3}.
+      True iff ∃ j in window: field[j−1] ≤ level < field[j] (above;
+      mirror below). NaN on either side of a candidate bar ⇒ that bar
+      can't cross. Vectorizes trivially (cheap set in the backtester).
+- [ ] **`persistence`** —
+      {"type":"persistence","field":F,"op":OP,"value":N,"bars":M}.
+      True iff ALL of the last M bars satisfy field OP value; any NaN
+      in the window ⇒ False. Link Ch. 7: an oscillator pinned at an
+      extreme for an extended period signals a strong trend, not a
+      reversal. Vectorizes trivially.
+- [ ] **`divergence`** — the fuzziest; ONE strict formula, no options:
+      {"type":"divergence","kind":"bullish"|"bearish",
+       "oscillator":"rsi"|"stoch_k","lookback":40}.
+      Bullish: take the two most recent CONFIRMED price pivot lows
+      (fractal k=5, ≥5 bars apart, both inside the lookback window);
+      require price: low(P2) < low(P1) strictly, AND oscillator at
+      those same two pivot dates: osc(P2) > osc(P1) strictly.
+      Bearish is the exact mirror on pivot highs. Fewer than two
+      confirmed pivots ⇒ False. Reuses sr.find_pivots — no new pivot
+      machinery. Backtester: expensive set (stride grid), consistency-
+      gated like near_support. Explainer must show both pivot dates,
+      both prices, both oscillator values.
+
+### Presets (5, all practitioner-tagged)
+
+- [ ] `link_high_probability_pullback` — the Ch. 10 composite,
+      flagship: weekly trend up + daily support_at_ma(ema_50, 1.5, 3)
+      + range rsi 35–55 (pulled back, not collapsed, not chasing) +
+      range adx min 30 (Link's strong-trend line). Caveat: composite
+      of individually-plausible rules; the composite itself is
+      untested folklore until our numbers land.
+- [ ] `link_oscillator_timed_entry` — trend up + threshold_cross rsi
+      above 40 (lookback 3) + range adx min 30. Ch. 7's "buy the
+      oversold reset in an uptrend, on the turn, never into it".
+- [ ] `link_trend_breakout` — Ch. 8 refinement of our existing
+      breakout preset: tight_range(10, 8) + breakout_resistance(5) +
+      volume_spike 1.5 + weekly trend up ("breakouts in the direction
+      of the major trend work best").
+- [ ] `link_persistent_strength` — persistence rsi ≥ 60 for 15 bars +
+      trend up. The anti-naive screen: pinned-high RSI as trend
+      confirmation, not a sell signal.
+- [ ] `link_bullish_divergence` — divergence bullish (rsi) +
+      near_support 3.0. Reversal screen; tagged lowest-confidence
+      (divergence has the weakest evidence basis of the five — say so
+      in the evidence object).
+
+### Explicitly NOT implemented, with reasons (LITERATURE.md records them)
+
+- Diagonal trendlines / channels — outside the horizontal-S/R
+  framework; a bad approximation is worse than an honest gap.
+- Fibonacci retracement levels — no evidence basis; skipped entirely.
+- Congestion-measured price targets — target estimation, not
+  screening; belongs to a future trade-plan layer if ever.
+- Multi-timeframe sync — already shipped (weekly conditions); Ch. 5
+  is validation, not work.
+
+### Vocabulary, fixtures, tests
+
+- [ ] Parser vocab: "RSI crossing above 40", "stochastics turning up",
+      "bullish divergence", "RSI holding above 60", "staying
+      overbought" → persistence. Ambiguity rule: bare "divergence"
+      without kind ⇒ parser must ask/refuse, not guess bullish.
+- [ ] Golden fixtures ≥4 incl. one refusal (bare "divergence").
+- [ ] Tests ≥14: stochastics hand-check; zero-range NaN; threshold
+      cross engineered (incl. NaN-adjacent bar); persistence window
+      edge; divergence engineered BOTH kinds (construct: decline to a
+      lower price low on visibly weaker momentum ⇒ RSI higher low)
+      plus a same-direction control that must NOT match; vectorizer≡
+      evaluator consistency for all three new types; preset validation
+      (import-time, free); evidence objects present.
+- [ ] LITERATURE.md: Link (2003) section — thesis, chapter mapping,
+      what we implemented vs skipped and why, full citation.
+
+Sized at one Claude Code session; divergence is the risk item — if
+its tests fight back, ship the other four conditions/presets and
+carry divergence to a follow-up rather than weakening the formula.
+
 ## 12. Recurring operations (not one-time)
 
 - [ ] Nightly: `update && verify` (cron after 18:30 IST) — set up once,
