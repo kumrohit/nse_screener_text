@@ -1402,6 +1402,72 @@ Sized at one Claude Code session; divergence is the risk item — if
 its tests fight back, ship the other four conditions/presets and
 carry divergence to a follow-up rather than weakening the formula.
 
+## 20. Performance plan (v0.18) — measured 2026-07-13
+
+**Measured baselines** (chat sandbox, 500 synthetic symbols × 1250 bars;
+nse_full ≈ ×4): `build_panels` **17.7s** (~35ms/sym; nse_full ≈ 71s) —
+called on EVERY CLI invocation (6 call sites) and every webapp cold
+start; evaluate-only screens 0.11s (cheap) / 0.6s (S/R); webapp
+explain-all pattern 0.17s / 1.5s; one sr call ~1ms. Profile of
+compute_panel: no dominant hot spot — ~40 pandas ops of fixed overhead
+per symbol. **Diagnosis: recomputation, not computation.** The
+INDICATOR_STORE cache has been declared in config since v0.1 and never
+implemented; nothing interactive should ever rebuild panels.
+
+### P1 — Indicator store cache (the fix; do first)
+
+- [ ] Persist built panels to data/{universe}/indicators.parquet (long
+      format + symbol column). Invalidation key stored alongside:
+      prices-store mtime + an `INDICATOR_SCHEMA_VERSION` constant in
+      indicators.py (bump whenever compute_panel's output changes — a
+      cache-equivalence test guards it: cached-loaded panels must
+      equal freshly built ones exactly, so a schema change without a
+      bump fails CI).
+- [ ] Write-through on `update` (the nightly cron builds the cache;
+      interactive paths only ever load). Cold-miss fallback:
+      build + write, once.
+- [ ] All 6 CLI call sites + webapp `_load_state` route through one
+      `load_panels(universe)` helper; on cache hit the CLI **skips
+      loading the raw prices parquet entirely** (panels + universe
+      meta + benchmark are sufficient for screen/backtest/cohorts).
+- [ ] **Targets (nse_full, the Air): CLI screen warm < 5s end-to-end;
+      webapp cold start < 10s; nifty500 warm < 2s.** Zero behaviour
+      change: results and spec hashes identical (equivalence test).
+
+### P2 — Parallel rebuild (the miss path)
+
+- [ ] ProcessPoolExecutor over symbol chunks for build_panels
+      (spawn-safe module-level worker). Target: nse_full rebuild 71s
+      → < 25s on 8 cores. Used by cron write-through and cold miss;
+      interactive latency no longer depends on it once P1 lands.
+
+### P3 — Webapp evaluate-first (secondary, measured 2-3×)
+
+- [ ] /api/screen currently computes full evidence for EVERY symbol to
+      find near-misses (1.5s @500 S/R). Split: cheap per-condition
+      pass/fail pass over all symbols (no evidence strings), then
+      explain only displayed rows (matches + near-misses ≤ ~100+15).
+      Also removes the evaluator+explainer double-sr for hidden
+      symbols. Target: S/R screen @nse_full < 3s after P1.
+
+### P4 — Deliberately NOT doing (recorded)
+
+- Per-symbol micro-optimisation of compute_panel (no hot spot to hit);
+  long-format cross-symbol vectorisation (large refactor, unnecessary
+  once nothing interactive rebuilds); request-scoped sr memoisation
+  (1ms/call — noise); rewriting evaluate in numpy (0.11-0.6s already).
+
+### P5 — Regression harness
+
+- [ ] tests/perf_bench.py (pytest -m perf, excluded from default CI):
+      re-times the four baseline numbers on the synthetic 500-universe
+      and fails on >2× regression vs recorded baselines; run before
+      every version tag. TECHNICAL_DESIGN gains the measured table.
+
+Sized ~one session (P1+P2+P5 together; P3 separable). The v1.0 gate
+(Item 18) gains P1 as a hardening prerequisite — shipping 1.0 with a
+70-second CLI screen would be embarrassing.
+
 ## 12. Recurring operations (not one-time)
 
 - [ ] Nightly: `update && verify` (cron after 18:30 IST) — set up once,
