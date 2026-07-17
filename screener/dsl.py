@@ -50,7 +50,8 @@ KNOWN_FIELDS = {
     "ema_200_slope",
     "sma_20", "sma_50", "sma_150", "sma_200",
     "sma_20_slope", "sma_50_slope", "sma_150_slope", "sma_200_slope",
-    "rsi", "atr", "atr_pct", "adx", "plus_di", "minus_di",
+    "rsi", "atr", "atr_pct", "adx", "plus_di", "minus_di", "adx_slope",
+    "stoch_k", "stoch_d",
     "macd", "macd_signal", "macd_hist",
     "bb_upper", "bb_lower", "bb_width_pct",
     "vol_avg_20", "vol_ratio", "turnover_cr",
@@ -66,7 +67,14 @@ CONDITION_TYPES = {
     "candle", "tight_range", "bb_squeeze", "flat_base",
     "sector", "rs_percentile", "sector_rank", "gap",
     "atr_pct_percentile", "breadth",
+    "threshold_cross", "persistence", "divergence",
 }
+
+# divergence.oscillator — the oscillators a divergence check can compare
+# against a price pivot. Not "stoch_d": %D is already a smoothed average
+# of %K, and the book's construction (and this implementation) reads the
+# turn off the faster line.
+DIVERGENCE_OSCILLATORS = {"rsi", "stoch_k"}
 
 # Basis a `rs_percentile` condition ranks stocks by — see LITERATURE.md §1.
 # "return": the existing window-bar simple close return (unchanged
@@ -244,6 +252,29 @@ def validate(screen: dict) -> dict:
             if c.get("direction") not in ("positive", "negative"):
                 raise DSLValidationError(
                     "breadth.direction must be positive/negative")
+        elif ctype == "threshold_cross":
+            _require(c, ["field", "level", "direction"])
+            _check_field(c["field"], "threshold_cross.field")
+            if c["direction"] not in ("above", "below"):
+                raise DSLValidationError(
+                    "threshold_cross.direction must be above/below")
+        elif ctype == "persistence":
+            _require(c, ["field", "op", "value", "bars"])
+            _check_field(c["field"], "persistence.field")
+            if c["op"] not in VALID_OPS:
+                raise DSLValidationError(f"bad op {c['op']!r}")
+            if not isinstance(c["bars"], int) or c["bars"] < 1:
+                raise DSLValidationError(
+                    "persistence.bars must be a positive integer")
+        elif ctype == "divergence":
+            _require(c, ["kind", "oscillator"])
+            if c["kind"] not in ("bullish", "bearish"):
+                raise DSLValidationError(
+                    "divergence.kind must be bullish/bearish")
+            if c["oscillator"] not in DIVERGENCE_OSCILLATORS:
+                raise DSLValidationError(
+                    f"divergence.oscillator must be one of "
+                    f"{sorted(DIVERGENCE_OSCILLATORS)}")
     return screen
 
 
@@ -376,6 +407,18 @@ def _append_condition(parts: list, c: dict) -> None:
                 f"market breadth {c['direction']} "
                 f"({'≥' if c['direction'] == 'positive' else '<'}50% of "
                 f"the universe above its 200-day SMA)")
+        elif t == "threshold_cross":
+            parts.append(
+                f"{_fmt_field(c['field'])} crossed {c['direction']} "
+                f"{c['level']} in last {c.get('lookback', 3)} bars")
+        elif t == "persistence":
+            parts.append(
+                f"{_fmt_field(c['field'])} {c['op']} {c['value']} for "
+                f"all of the last {c['bars']} bars")
+        elif t == "divergence":
+            parts.append(
+                f"{c['kind']} divergence ({c['oscillator']}, confirmed "
+                f"pivots within last {c.get('lookback', 40)} bars)")
         if c.get("timeframe") == "weekly" and parts:
             parts[-1] += " [weekly]"
 
@@ -399,6 +442,8 @@ CANON_DEFAULTS = {
     "rs_percentile": {"window": 63, "basis": "return"},
     "sector_rank": {"window": 63},
     "gap": {"min_gap_pct": 2.0, "lookback": 3},
+    "threshold_cross": {"lookback": 3},
+    "divergence": {"lookback": 40},
 }
 
 

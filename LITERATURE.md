@@ -392,6 +392,98 @@ justify with evidence either way).
 
 ---
 
+## 10. Practitioner discretionary trading rules (Link 2003)
+
+**Basis:** practitioner — the same evidentiary standing as family #7
+(Minervini): a specific, replicable, fully price/volume-based rule set
+with no dedicated academic study behind it, honestly labeled rather than
+dressed up.
+
+**What it is.** Marcel Link, *High Probability Trading* (McGraw-Hill,
+2003) — a full-book review (2026-07-13). The book's core thesis is entry
+*timing* within an already-favorable trend/setup, built from three
+recurring constructions used across several of its chapters: (a) the slow
+stochastic oscillator (14-3-3 convention) and a rising/falling ADX as
+trend-strength gauges (Ch. 6); (b) "buy the oversold reset on the turn,
+never while it's still falling" — an oscillator crossing a threshold
+level, not merely being past it (Ch. 7); (c) an oscillator pinned at an
+extreme for an extended stretch read as trend confirmation, the opposite
+of a naive "overbought means sell" reading (Ch. 7); (d) breakouts filtered
+to fire only in the direction of the higher-timeframe trend (Ch. 8); and
+(e) price/oscillator divergence at confirmed swing pivots as a reversal
+signal (Ch. 9). Chapter 10's own composite setup —
+`link_high_probability_pullback` — stacks (a) and Item 16's existing
+support-at-MA construction together, using Link's own ADX-30 "strong
+trend" convention rather than this codebase's canonical ADX-25 bar used
+elsewhere (a deliberate, documented divergence from the existing default,
+not an oversight).
+
+**Why include it despite the weak academic basis.** Same reasoning as
+family #7: it is a widely-read practitioner text with precise, fully
+mechanical rules (no discretion required to check any of them), and
+several of its ideas — oscillator persistence-as-confirmation, entry
+timed to the turn rather than the level, trend-filtered breakouts — are
+genuinely different constructions from anything already in this
+codebase's condition set, not restatements of the existing trend/RSI/
+breakout conditions under a new name.
+
+**India evidence.** None claimed; not applicable — this is not an
+academic finding to begin with, same posture as family #7.
+
+**Caveat.** No peer-reviewed out-of-sample test of any of these
+constructions, individually or combined, is known to the author of this
+document. Every preset built from this review earns nothing until it
+survives this codebase's own backtest (`screen backtest`) and cohort
+(`cohort create`/`scorecard`) gauntlet — the same bar every other
+practitioner-basis preset in this document is held to. Divergence in
+particular carries the weakest evidence basis of the five: pivot-based
+divergence detection is itself a discretionary, much-disputed technique
+even within technical-analysis practice, on top of the general
+practitioner caveats the rest of this family already carries.
+
+**Engine additions.** `stoch_k`/`stoch_d` (slow stochastic, fixed 14-3-3
+— not a tunable, same fixed-canonical-definition precedent as family #9's
+breadth threshold) and `adx_slope` (5-bar diff, the same slope convention
+already used for every EMA/SMA field) — see `screener/indicators.py`.
+Three new condition types: `threshold_cross` (a field crossing a constant
+level within a lookback window — construction (b) above),
+`persistence` (every bar in a window satisfies a comparison —
+construction (c)), and `divergence` (two confirmed fractal pivots via the
+existing `sr.find_pivots`, strict price/oscillator inequalities on both
+legs — construction (e)). `divergence` is in the backtester's expensive
+set (stride-grid approximated, like `near_support`) since it re-runs a
+pivot search over its own lookback on every bar; `threshold_cross` and
+`persistence` vectorize exactly like every other cheap condition.
+
+**Explicitly not implemented, with reasons.**
+- *Diagonal trendlines / channels* — this codebase's support/resistance
+  machinery (TECHNICAL_DESIGN.md §8) is deliberately horizontal-only
+  (fractal pivot clustering); a diagonal trendline has no single
+  "level," and an approximated one would be a worse, silently-wrong
+  version of a real technique rather than an honest gap.
+- *Fibonacci retracement levels* — no evidence basis located for this
+  review, and the levels are a fixed ratio convention with no
+  price/volume construction to validate against; skipped entirely
+  rather than implemented as decoration.
+- *Congestion-measured price targets* — target estimation is a different
+  problem from screening (this codebase's `allocate.py` handles position
+  *sizing*, not price *targets*); belongs to a future trade-plan layer,
+  if one is ever built, not the screener.
+- *Multi-timeframe confirmation* — already shipped (the `timeframe:
+  "weekly"` mechanism, §12b's UI depth work); Link's Ch. 5 treatment of
+  this idea is validation of an existing capability, not new work.
+
+**DSL mapping.** `link_high_probability_pullback` (weekly `trend` up +
+daily `support_at_ma` ema_50 + `range` rsi 35-55 + `range` adx min 30),
+`link_oscillator_timed_entry` (`trend` up + `threshold_cross` rsi above
+40 + `range` adx min 30), `link_trend_breakout` (`tight_range` +
+`breakout_resistance` + `volume_spike` + weekly `trend` up),
+`link_persistent_strength` (`persistence` rsi >= 60 for 15 bars +
+`trend` up), `link_bullish_divergence` (`divergence` bullish rsi +
+`near_support`).
+
+---
+
 ## Annotation policy for the 11 remaining existing presets
 
 Not every existing preset maps to one of the eight families above by
@@ -443,6 +535,9 @@ the source they cite back to.
   Diversification: How Inefficient is the 1/N Portfolio Strategy?" *Review
   of Financial Studies* 22(5). — cited here for cross-reference; used
   directly in ROADMAP Item 10 (portfolio allocation engine), not a preset.
+- Link, M. (2003). *High Probability Trading*. McGraw-Hill. — practitioner
+  source for family #10; not peer-reviewed, same evidentiary standing as
+  the Minervini/O'Neil template in family #7.
 
 ## Non-goals stated plainly
 

@@ -244,6 +244,79 @@ def cond_breadth(panel, c, i, breadth: dict | None = None) -> bool:
     return pct >= 50 if c["direction"] == "positive" else pct < 50
 
 
+def cond_threshold_cross(panel, c, i) -> bool:
+    """True iff the field crossed `level` within the lookback window:
+    field[j-1] <= level < field[j] (above), or the mirror (below).
+    Link (2003) ch.7's oscillator-turn entry — catching the turn, not
+    just "currently past the threshold"."""
+    lb = int(c.get("lookback", 3))
+    level = float(c["level"])
+    s = panel[c["field"]]
+    lo = max(1, i - lb + 1)
+    for j in range(lo, i + 1):
+        prev, cur = s.iloc[j - 1], s.iloc[j]
+        if pd.isna(prev) or pd.isna(cur):
+            continue
+        if c["direction"] == "above" and prev <= level < cur:
+            return True
+        if c["direction"] == "below" and prev >= level > cur:
+            return True
+    return False
+
+
+def cond_persistence(panel, c, i) -> bool:
+    """True iff ALL of the last `bars` bars satisfy field OP value.
+    Link (2003) ch.7: an oscillator pinned at an extreme for an
+    extended period signals a strong trend, not an imminent reversal.
+    Any NaN in the window fails closed via _cmp, same as every other
+    bar."""
+    bars = int(c["bars"])
+    lo = i - bars + 1
+    if lo < 0:
+        return False
+    win = panel[c["field"]].iloc[lo: i + 1]
+    op, value = c["op"], float(c["value"])
+    return bool(all(_cmp(v, op, value) for v in win))
+
+
+def cond_divergence(panel, c, i) -> bool:
+    """Price/oscillator divergence at the two most recent CONFIRMED
+    fractal pivots (k=5, reusing sr.find_pivots — no separate pivot
+    machinery) within the lookback window. Bullish: a strictly lower
+    price low at the second pivot with a strictly higher oscillator
+    reading (momentum fading on the down move). Bearish is the exact
+    mirror on pivot highs. The two pivots must be >=5 bars apart; fewer
+    than two confirmed pivots in the window fails closed. Confirmation
+    is structural, not asserted: find_pivots' centered rolling window
+    can never mark a pivot in the last k bars of `win`, so this never
+    uses a pivot the market hadn't confirmed yet as of row i."""
+    from . import sr
+    lb = int(c.get("lookback", 40))
+    osc_field = c["oscillator"]
+    lo = max(0, i - lb + 1)
+    win = panel.iloc[lo: i + 1]
+    if len(win) < 2 * sr.PIVOT_K + 1:
+        return False
+    ph, pl = sr.find_pivots(win, k=sr.PIVOT_K)
+    bullish = c["kind"] == "bullish"
+    mask = pl if bullish else ph
+    price_field = "low" if bullish else "high"
+    pivot_dates = list(win.index[mask])
+    if len(pivot_dates) < 2:
+        return False
+    p1, p2 = pivot_dates[-2], pivot_dates[-1]
+    j1, j2 = win.index.get_loc(p1), win.index.get_loc(p2)
+    if j2 - j1 < sr.PIVOT_K:
+        return False
+    price1, price2 = win[price_field].loc[p1], win[price_field].loc[p2]
+    osc1, osc2 = win[osc_field].loc[p1], win[osc_field].loc[p2]
+    if any(pd.isna(x) for x in (price1, price2, osc1, osc2)):
+        return False
+    if bullish:
+        return bool(price2 < price1 and osc2 > osc1)
+    return bool(price2 > price1 and osc2 < osc1)
+
+
 DISPATCH = {
     "compare": cond_compare, "proximity": cond_proximity,
     "trend": cond_trend, "support_at_ma": cond_support_at_ma,
@@ -252,6 +325,9 @@ DISPATCH = {
     "near_support": cond_near_support,
     "near_resistance": cond_near_resistance,
     "breakout_resistance": cond_breakout_resistance,
+    "threshold_cross": cond_threshold_cross,
+    "persistence": cond_persistence,
+    "divergence": cond_divergence,
 }
 
 # Condition types that need cross-symbol context beyond a single panel

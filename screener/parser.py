@@ -36,6 +36,7 @@ open, high, low, close, volume, ema_10, ema_20, ema_50, ema_100, ema_200,
 ema_10_slope, ema_20_slope, ema_50_slope, ema_100_slope, ema_200_slope,
 sma_20, sma_50, sma_150, sma_200, sma_20_slope, sma_50_slope,
 sma_150_slope, sma_200_slope, rsi, atr, atr_pct, adx, plus_di, minus_di,
+adx_slope, stoch_k, stoch_d,
 macd, macd_signal, macd_hist, bb_upper, bb_lower, bb_width_pct,
 vol_avg_20, vol_ratio, turnover_cr, high_52w, low_52w, pct_from_52w_high,
 pct_from_52w_low, roc_5, roc_21, roc_63, roc_126, roc_252, mom_12_1
@@ -71,6 +72,23 @@ Additional condition types:
   fewer than 50%. This is a regime qualifier, not a standalone signal —
   weak alone, meant to condition other conditions (e.g. "uptrend AND
   positive breadth").
+- {"type":"threshold_cross","field":FIELD,"level":N,
+  "direction":"above"|"below","lookback":N} — true if FIELD crossed
+  the constant level N within the lookback window (not just "is
+  currently past N" — catches the turn). FIELD is usually rsi or
+  stoch_k.
+- {"type":"persistence","field":FIELD,"op":OP,"value":N,"bars":N} —
+  true if EVERY one of the last N bars satisfies FIELD OP value (an
+  oscillator pinned at an extreme for an extended stretch, read as
+  trend confirmation — see the vocabulary note below, this is NOT the
+  same as "currently at an extreme").
+- {"type":"divergence","kind":"bullish"|"bearish",
+  "oscillator":"rsi"|"stoch_k","lookback":N} — price/oscillator
+  divergence at the two most recent confirmed swing pivots within the
+  lookback window: bullish is a lower price low with a higher
+  oscillator low (momentum fading on the down move); bearish is the
+  mirror on highs. kind is REQUIRED — never guess bullish vs bearish
+  from a bare "divergence" mention; refuse instead.
 
 Allowed SECTOR values (exact strings, use exactly these):
 Automobile and Auto Components, Capital Goods, Chemicals, Construction,
@@ -130,6 +148,28 @@ Canonical vocabulary (ALWAYS use these mappings):
   {"type":"range","field":"pct_from_52w_low","min":30},
   {"type":"range","field":"pct_from_52w_high","min":-25},
   {"type":"rs_percentile","window":63,"op":">=","value":70}
+- "RSI crossing above 40" / "RSI turning up through 40" ->
+  {"type":"threshold_cross","field":"rsi","level":40,"direction":"above",
+  "lookback":3} (a stated level replaces 40; "crossing below"/"turning
+  down through" -> direction "below")
+- "stochastics turning up" / "stochastic crossing above 20" ->
+  {"type":"threshold_cross","field":"stoch_k","level":20,
+  "direction":"above","lookback":3} (no level stated -> 20; "turning
+  down"/"crossing below" -> direction "below", default level 80)
+- "RSI holding above 60" / "staying overbought" / "RSI pinned above 70
+  for two weeks" -> {"type":"persistence","field":"rsi","op":">=",
+  "value":60,"bars":15} (use the user's stated level/duration if given
+  — "two weeks" -> bars 10 — else these canonical defaults; a stated
+  duration with no level defaults level to 60; mirror with op "<=" for
+  "holding below"/"staying oversold")
+- "bullish divergence" -> {"type":"divergence","kind":"bullish",
+  "oscillator":"rsi","lookback":40}
+- "bearish divergence" -> {"type":"divergence","kind":"bearish",
+  "oscillator":"rsi","lookback":40}
+- bare "divergence" with no bullish/bearish stated -> refuse
+  ({"error":"..."}). Never guess which kind — this is a hard rule, not
+  a default-filling case (divergence's direction changes what the
+  screen means, unlike e.g. an unstated tolerance_pct).
 
 Pattern conditions:
 - {"type":"candle","pattern":P,"lookback":N} where P is one of:

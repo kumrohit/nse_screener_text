@@ -126,6 +126,8 @@ ATR_PERIOD = 14
 ADX_PERIOD = 14
 VOL_AVG_PERIOD = 20
 BB_PERIOD, BB_STD = 20, 2.0
+# Slow stochastic (Link 2003 Ch. 6's 14-3-3 convention — ROADMAP Item 19)
+STOCH_PERIOD, STOCH_SMOOTH_K, STOCH_SMOOTH_D = 14, 3, 3
 
 # ---------------------------------------------------------------- parser
 ANTHROPIC_MODEL = "claude-sonnet-4-6"

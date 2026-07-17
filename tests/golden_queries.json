@@ -439,5 +439,94 @@
       "as_of": "latest"
     },
     "note": "market breadth regime gate (LITERATURE.md \u00a79) \u2014 a regime qualifier, not a standalone signal"
+  },
+  {
+    "query": "RSI crossing above 40 in an uptrend",
+    "expected": {
+      "logic": "AND",
+      "conditions": [
+        {
+          "type": "threshold_cross",
+          "field": "rsi",
+          "level": 40,
+          "direction": "above",
+          "lookback": 3
+        },
+        {
+          "type": "trend",
+          "direction": "up"
+        }
+      ],
+      "as_of": "latest"
+    },
+    "note": "Link (2003) ch.7 oscillator-turn entry timing (LITERATURE.md \u00a710)"
+  },
+  {
+    "query": "RSI holding above 60 for 15 bars in an uptrend",
+    "expected": {
+      "logic": "AND",
+      "conditions": [
+        {
+          "type": "persistence",
+          "field": "rsi",
+          "op": ">=",
+          "value": 60,
+          "bars": 15
+        },
+        {
+          "type": "trend",
+          "direction": "up"
+        }
+      ],
+      "as_of": "latest"
+    },
+    "note": "Link (2003) ch.7 pinned-extreme-as-trend-confirmation (LITERATURE.md \u00a710)"
+  },
+  {
+    "query": "bullish divergence near support",
+    "expected": {
+      "logic": "AND",
+      "conditions": [
+        {
+          "type": "divergence",
+          "kind": "bullish",
+          "oscillator": "rsi",
+          "lookback": 40
+        },
+        {
+          "type": "near_support",
+          "tolerance_pct": 2.0
+        }
+      ],
+      "as_of": "latest"
+    },
+    "note": "Link (2003) reversal setup, weakest evidence basis of the family (LITERATURE.md \u00a710)"
+  },
+  {
+    "query": "bearish divergence in a downtrend",
+    "expected": {
+      "logic": "AND",
+      "conditions": [
+        {
+          "type": "divergence",
+          "kind": "bearish",
+          "oscillator": "rsi",
+          "lookback": 40
+        },
+        {
+          "type": "trend",
+          "direction": "down"
+        }
+      ],
+      "as_of": "latest"
+    },
+    "note": "mirror of the bullish divergence construction, on pivot highs"
+  },
+  {
+    "query": "divergence",
+    "expected": {
+      "error": true
+    },
+    "note": "bare divergence with no bullish/bearish stated \u2014 parser must refuse, never guess the kind"
   }
 ]

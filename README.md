@@ -85,7 +85,7 @@ Three ways to define a screen: type it in **plain English** and hit
 **Interpret query** to see exactly how it was understood (plain English +
 the compiled JSON spec, plus any canonical defaults the parser filled in
 that you didn't state explicitly) before running; paste a raw **JSON
-spec**; or pick from the **preset dropdown** — 26 curated screens grouped
+spec**; or pick from the **preset dropdown** — 31 curated screens grouped
 by intent (trend continuation, breakouts, reversals, relative strength,
 bearish), each shown with its rationale, compiled English, and an
 **evidence tag** (academic / practitioner / mixed) with the literature
@@ -234,6 +234,10 @@ python -m screener.cli screen --json '{"logic":"AND","conditions":[
   {"type":"trend","direction":"up"},
   {"type":"range","field":"rsi","max":40}]}'
 
+# Link (2003) practitioner screens — see LITERATURE.md §10
+python -m screener.cli screen --preset link_high_probability_pullback
+python -m screener.cli screen "bullish divergence near support"
+
 # backtest: what happened after this signal fired historically?
 python -m screener.cli backtest "taking support at 50 EMA and in an uptrend" \
   --hypothesis "expect modest positive 20-bar excess, pullback-continuation setup"
@@ -294,6 +298,9 @@ python -m screener.cli verify --universe nifty500       # includes an evidence-b
 | "low volatility stocks" / "high volatility stocks" | ATR% ranked as a percentile across the universe, bottom/top tercile |
 | "stage 2" / "Minervini template" | the full practitioner trend template — see [LITERATURE.md §7](LITERATURE.md) |
 | "positive market breadth" / "broad market strength" | ≥50% of the universe closed above its own 200-day SMA — a regime gate, same value for every stock (see [LITERATURE.md §9](LITERATURE.md)) |
+| "RSI crossing above 40" / "stochastics turning up" | the field crossed a level within a lookback window — catches the turn, not just "past the level" (see [LITERATURE.md §10](LITERATURE.md)) |
+| "RSI holding above 60" / "staying overbought" | every bar in a window satisfies the comparison — a pinned extreme read as trend confirmation, not a reversal cue |
+| "bullish divergence" / "bearish divergence" | price and oscillator disagree at the two most recent confirmed swing pivots; bare "divergence" with no direction stated is refused, never guessed |
 | "up 10% in a month", "between 40 and 60" | explicit numbers pass straight through |
 
 Anything it can't map to the documented vocabulary — P/E ratios, news, "good management" — returns an explicit error instead of a silently wrong screen.
@@ -318,7 +325,7 @@ Unknown keys are flagged and ignored rather than silently doing nothing. The eff
 ## Tests
 
 ```bash
-python -m pytest tests/                    # 354 tests: synthetic series with known answers,
+python -m pytest tests/                    # 383 tests: synthetic series with known answers,
                                            # evidence-layer agreement, web API contract,
                                            # allocation-engine invariants, backtester
                                            # methodology (event dedup, entry convention,
@@ -331,10 +338,13 @@ python -m pytest tests/                    # 354 tests: synthetic series with kn
                                            # market breadth (hand-computed regime
                                            # gate, exact vectorizer consistency), evidence
                                            # backup (rotation, corruption detection),
-                                           # schema versioning (migrate-and-persist)
+                                           # schema versioning (migrate-and-persist),
+                                           # Link (2003) practitioner screens (stochastic
+                                           # hand-check, threshold-cross/persistence edge
+                                           # cases, divergence pivot detection)
 cd web/visual && npm test                  # visual regression: 6 baseline screenshots
                                            # against a live demo-mode server (see below)
-python -m tests.golden_harness             # live parser scoring vs 24 hand-verified queries
+python -m tests.golden_harness             # live parser scoring vs 29 hand-verified queries
 ```
 
 CI runs the offline suite on every push. The live harness gates any change to the parser prompt: N/N or it doesn't ship (also runnable as a manual GitHub Actions job — `.github/workflows/golden-harness.yml`). The visual suite needs a real running server in **demo mode** for deterministic screenshots — `SCREENER_FORCE_DEMO=1 python -m screener.webapp` in one terminal, `cd web/visual && npm install && npx playwright install chromium && npm test` in another; `npm run update` regenerates the committed baseline after an intentional UI change.

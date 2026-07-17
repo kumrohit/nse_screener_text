@@ -2345,3 +2345,343 @@ class TestResetButton:
         # and must not touch persisted stores
         assert "watchlist.jsonl" not in js.split("function resetAll()")[1] \
             .split("function toast")[0]
+
+
+# ============================================================ ROADMAP Item 19
+# Link (2003) practitioner screens: stochastics/adx_slope fields, three new
+# condition types (threshold_cross, persistence, divergence), five presets.
+def _mini_panel(**cols) -> pd.DataFrame:
+    """A DataFrame with only the columns a condition actually needs —
+    threshold_cross/persistence only ever read one named field. Values
+    are coerced to plain arrays first: handing pandas a dict of Series
+    that carry their own (default RangeIndex) index alongside an
+    explicit `index=` reindexes each column by label instead of by
+    position, silently turning every value into NaN."""
+    cols = {k: np.asarray(v, dtype=float) for k, v in cols.items()}
+    n = len(next(iter(cols.values())))
+    idx = pd.bdate_range("2022-01-03", periods=n)
+    return pd.DataFrame(cols, index=idx)
+
+
+class TestLinkIndicators:
+    def test_stochastic_hand_computed(self):
+        """n=5, smooth_k=3, smooth_d=3 — every raw %K, slow %K, and %D
+        value below computed independently by hand, not re-derived from
+        the implementation."""
+        high = [10, 11, 12, 11, 10, 13, 14, 12, 11, 10]
+        low = [8, 9, 10, 9, 8, 11, 12, 10, 9, 8]
+        close = [9, 10, 11, 10, 9, 12, 13, 11, 10, 9]
+        df = _mini_panel(high=pd.Series(high, dtype=float),
+                         low=pd.Series(low, dtype=float),
+                         close=pd.Series(close, dtype=float))
+        out = indicators.stochastic(df, n=5, smooth_k=3, smooth_d=3)
+        # raw %K[4]=25, [5]=80, [6]=83.3333, [7]=50, [8]=33.3333, [9]=16.6667
+        # slow %K[8] = mean(raw[6],raw[7],raw[8]) = mean(83.3333,50,33.3333)
+        assert out["stoch_k"].iloc[8] == pytest.approx(55.5556, abs=0.01)
+        assert out["stoch_k"].iloc[9] == pytest.approx(33.3333, abs=0.01)
+        # %D[8] = mean(slow_k[6],slow_k[7],slow_k[8])
+        assert out["stoch_d"].iloc[8] == pytest.approx(63.1481, abs=0.01)
+        assert out["stoch_d"].iloc[9] == pytest.approx(53.3333, abs=0.01)
+
+    def test_stochastic_zero_range_is_nan_not_inf(self):
+        n = 20
+        flat = pd.Series(100.0, index=range(n))
+        df = _mini_panel(high=flat, low=flat, close=flat)
+        out = indicators.stochastic(df, n=14, smooth_k=3, smooth_d=3)
+        assert pd.isna(out["stoch_k"].iloc[-1])
+        assert pd.isna(out["stoch_d"].iloc[-1])
+        assert not np.isinf(out["stoch_k"].fillna(0)).any()
+
+    def test_stochastic_saturates_at_100_for_monotonic_uptrend(self):
+        """A strictly rising series is always at the top of its own
+        n-bar range once the window is full — a real, hand-derivable
+        invariant, not a re-implementation check."""
+        n = 60
+        ramp = pd.Series(np.arange(1, n + 1), dtype=float)
+        df = _mini_panel(high=ramp, low=ramp, close=ramp)
+        out = indicators.stochastic(df, n=14, smooth_k=3, smooth_d=3)
+        assert out["stoch_k"].iloc[-1] == pytest.approx(100.0)
+        assert out["stoch_d"].iloc[-1] == pytest.approx(100.0)
+
+    def test_adx_slope_is_5bar_diff_of_adx(self):
+        panel = uptrend_pullback_panel()
+        pd.testing.assert_series_equal(
+            panel["adx_slope"], panel["adx"].diff(5), check_names=False)
+
+    def test_stoch_and_adx_slope_in_known_fields(self):
+        assert {"stoch_k", "stoch_d", "adx_slope"} <= dsl.KNOWN_FIELDS
+
+
+class TestThresholdCross:
+    def test_dsl_validation(self):
+        with pytest.raises(dsl.DSLValidationError):
+            dsl.validate({"conditions": [{"type": "threshold_cross",
+                                          "field": "rsi", "level": 40}]})
+        with pytest.raises(dsl.DSLValidationError):
+            dsl.validate({"conditions": [
+                {"type": "threshold_cross", "field": "rsi", "level": 40,
+                 "direction": "sideways"}]})
+        spec = dsl.validate({"conditions": [
+            {"type": "threshold_cross", "field": "rsi", "level": 40,
+             "direction": "above"}]})
+        assert "crossed above" in dsl.describe(spec)
+
+    def test_crosses_within_lookback(self):
+        from screener.evaluator import cond_threshold_cross
+        panel = _mini_panel(rsi=[30, 32, 35, 38, 42, 44])
+        c = {"field": "rsi", "level": 40, "direction": "above",
+            "lookback": 3}
+        assert cond_threshold_cross(panel, c, 5) is True
+
+    def test_crossing_bar_outside_lookback_does_not_match(self):
+        from screener.evaluator import cond_threshold_cross
+        panel = _mini_panel(rsi=[30, 32, 35, 38, 42, 44])
+        c = {"field": "rsi", "level": 40, "direction": "above",
+            "lookback": 1}
+        # the cross happened at bar 4->5's predecessor pair, already
+        # past by the time lookback=1 only looks at bar 5 itself
+        assert cond_threshold_cross(panel, c, 5) is False
+
+    def test_nan_adjacent_bar_does_not_falsely_match_or_crash(self):
+        from screener.evaluator import cond_threshold_cross
+        # the real cross (38->42) is still inside the window and must
+        # still be found even with an unrelated NaN earlier in it
+        panel = _mini_panel(rsi=[30, 32, np.nan, 38, 42, 44])
+        c = {"field": "rsi", "level": 40, "direction": "above",
+            "lookback": 3}
+        assert cond_threshold_cross(panel, c, 5) is True
+        # but a NaN sitting exactly between the two candidate bars means
+        # neither adjacent pair can confirm a cross there — no crash,
+        # and no false match
+        panel2 = _mini_panel(rsi=[30, 32, 35, 38, np.nan, 44])
+        assert cond_threshold_cross(panel2, c, 5) is False
+
+    def test_mirror_below_direction(self):
+        from screener.evaluator import cond_threshold_cross
+        panel = _mini_panel(rsi=[70, 68, 65, 62, 58, 55])
+        c = {"field": "rsi", "level": 60, "direction": "below",
+            "lookback": 3}
+        assert cond_threshold_cross(panel, c, 5) is True
+
+
+class TestPersistence:
+    def test_dsl_validation(self):
+        with pytest.raises(dsl.DSLValidationError):
+            dsl.validate({"conditions": [{"type": "persistence",
+                                          "field": "rsi", "op": ">=",
+                                          "value": 60}]})  # missing bars
+        with pytest.raises(dsl.DSLValidationError):
+            dsl.validate({"conditions": [
+                {"type": "persistence", "field": "rsi", "op": ">=",
+                 "value": 60, "bars": 0}]})
+        spec = dsl.validate({"conditions": [
+            {"type": "persistence", "field": "rsi", "op": ">=",
+             "value": 60, "bars": 15}]})
+        assert "for all of the last 15 bars" in dsl.describe(spec)
+
+    def test_all_bars_satisfy_matches(self):
+        from screener.evaluator import cond_persistence
+        panel = _mini_panel(rsi=[65, 66, 64, 70, 68])
+        c = {"field": "rsi", "op": ">=", "value": 60, "bars": 5}
+        assert cond_persistence(panel, c, 4) is True
+
+    def test_one_bar_below_fails(self):
+        from screener.evaluator import cond_persistence
+        panel = _mini_panel(rsi=[65, 66, 55, 70, 68])
+        c = {"field": "rsi", "op": ">=", "value": 60, "bars": 5}
+        assert cond_persistence(panel, c, 4) is False
+
+    def test_insufficient_history_returns_false(self):
+        from screener.evaluator import cond_persistence
+        panel = _mini_panel(rsi=[65, 66, 64, 70])
+        c = {"field": "rsi", "op": ">=", "value": 60, "bars": 5}
+        assert cond_persistence(panel, c, 3) is False
+
+    def test_nan_in_window_returns_false(self):
+        from screener.evaluator import cond_persistence
+        panel = _mini_panel(rsi=[65, 66, np.nan, 70, 68])
+        c = {"field": "rsi", "op": ">=", "value": 60, "bars": 5}
+        assert cond_persistence(panel, c, 4) is False
+
+
+def _divergence_panel(pivot1_price, pivot2_price, pivot1_osc, pivot2_osc,
+                      *, kind: str) -> pd.DataFrame:
+    """30 flat/monotonic bars with two clean, unambiguous fractal pivots
+    (k=5) forced at index 10 and 20, >=10 bars apart. `kind='bullish'`
+    shapes two pivot LOWS (dips below a strictly rising baseline, so no
+    ties can occur elsewhere); `kind='bearish'` shapes two pivot HIGHS
+    (spikes above a strictly falling baseline)."""
+    n = 30
+    if kind == "bullish":
+        low = 100 + 0.001 * np.arange(n)
+        low[10], low[20] = pivot1_price, pivot2_price
+        high = low + 1.0
+    else:
+        high = 100 - 0.001 * np.arange(n)
+        high[10], high[20] = pivot1_price, pivot2_price
+        low = high - 1.0
+    rsi = np.full(n, 50.0)
+    rsi[10], rsi[20] = pivot1_osc, pivot2_osc
+    return _mini_panel(high=high, low=low, rsi=rsi)
+
+
+class TestDivergence:
+    def test_dsl_validation(self):
+        with pytest.raises(dsl.DSLValidationError):
+            dsl.validate({"conditions": [{"type": "divergence",
+                                          "oscillator": "rsi"}]})
+        with pytest.raises(dsl.DSLValidationError):
+            dsl.validate({"conditions": [
+                {"type": "divergence", "kind": "sideways",
+                 "oscillator": "rsi"}]})
+        with pytest.raises(dsl.DSLValidationError):
+            dsl.validate({"conditions": [
+                {"type": "divergence", "kind": "bullish",
+                 "oscillator": "macd"}]})
+        spec = dsl.validate({"conditions": [
+            {"type": "divergence", "kind": "bullish",
+             "oscillator": "rsi"}]})
+        assert "bullish divergence" in dsl.describe(spec)
+
+    def test_bullish_divergence_detected(self):
+        from screener.evaluator import cond_divergence
+        # price: lower low (90 -> 85); oscillator: higher low (30 -> 45)
+        panel = _divergence_panel(90, 85, 30, 45, kind="bullish")
+        c = {"kind": "bullish", "oscillator": "rsi", "lookback": 25}
+        assert cond_divergence(panel, c, len(panel) - 1) is True
+
+    def test_bearish_divergence_detected(self):
+        from screener.evaluator import cond_divergence
+        # price: higher high (110 -> 115); oscillator: lower high (70 -> 55)
+        panel = _divergence_panel(110, 115, 70, 55, kind="bearish")
+        c = {"kind": "bearish", "oscillator": "rsi", "lookback": 25}
+        assert cond_divergence(panel, c, len(panel) - 1) is True
+
+    def test_control_confirmed_move_is_not_divergence(self):
+        """Price makes a lower low AND the oscillator confirms it with
+        its own lower low (no fading momentum) — this must NOT read as
+        bullish divergence."""
+        from screener.evaluator import cond_divergence
+        panel = _divergence_panel(90, 85, 45, 30, kind="bullish")
+        c = {"kind": "bullish", "oscillator": "rsi", "lookback": 25}
+        assert cond_divergence(panel, c, len(panel) - 1) is False
+
+    def test_fewer_than_two_pivots_returns_false(self):
+        from screener.evaluator import cond_divergence
+        n = 30
+        low = 100 + 0.001 * np.arange(n)
+        low[10] = 90.0  # only one dip
+        high = low + 1.0
+        rsi = np.full(n, 50.0)
+        panel = _mini_panel(high=high, low=low, rsi=rsi)
+        c = {"kind": "bullish", "oscillator": "rsi", "lookback": 25}
+        assert cond_divergence(panel, c, len(panel) - 1) is False
+
+    def test_explainer_shows_both_pivot_dates_prices_and_osc_values(self):
+        from screener import explain
+        panel = _divergence_panel(90, 85, 30, 45, kind="bullish")
+        spec = {"conditions": [{"type": "divergence", "kind": "bullish",
+                                "oscillator": "rsi", "lookback": 25}]}
+        ev = explain.explain_symbol(panel, spec)
+        assert ev[0]["passed"] is True
+        vals = ev[0]["values"]
+        assert vals["pivot1_price"] == pytest.approx(90, abs=0.5)
+        assert vals["pivot2_price"] == pytest.approx(85, abs=0.5)
+        assert vals["pivot1_osc"] == pytest.approx(30)
+        assert vals["pivot2_osc"] == pytest.approx(45)
+        assert vals["pivot1_date"] and vals["pivot2_date"]
+
+
+class TestLinkBacktestVectorizerConsistency:
+    """The CRITICAL acceptance test (ROADMAP Item 14's own bar) applied
+    to the three new condition types: the backtester's signal path must
+    never disagree with the row-by-row evaluator."""
+
+    def test_threshold_cross(self):
+        from screener import backtest as bt
+        panels, uni = _breadth_universe()
+        spec = dsl.validate({"conditions": [
+            {"type": "threshold_cross", "field": "rsi", "level": 50,
+             "direction": "above", "lookback": 5}]})
+        report = bt.verify_vectorizer_consistency(panels, uni, spec,
+                                                   n_samples=80)
+        assert report["checked"] > 0
+        assert report["mismatches"] == []
+
+    def test_persistence(self):
+        from screener import backtest as bt
+        panels, uni = _breadth_universe()
+        spec = dsl.validate({"conditions": [
+            {"type": "persistence", "field": "rsi", "op": ">=",
+             "value": 50, "bars": 10}]})
+        report = bt.verify_vectorizer_consistency(panels, uni, spec,
+                                                   n_samples=80)
+        assert report["checked"] > 0
+        assert report["mismatches"] == []
+
+    def test_divergence(self):
+        from screener import backtest as bt
+        panels, uni = _breadth_universe()
+        spec = dsl.validate({"conditions": [
+            {"type": "divergence", "kind": "bullish", "oscillator": "rsi",
+             "lookback": 40}]})
+        report = bt.verify_vectorizer_consistency(panels, uni, spec,
+                                                   n_samples=50)
+        assert report["checked"] > 0
+        assert report["mismatches"] == []
+
+
+class TestLinkPresets:
+    LINK_PRESET_IDS = (
+        "link_high_probability_pullback", "link_oscillator_timed_entry",
+        "link_trend_breakout", "link_persistent_strength",
+        "link_bullish_divergence",
+    )
+
+    def test_all_five_registered_with_practitioner_evidence(self):
+        from screener import presets
+        for pid in self.LINK_PRESET_IDS:
+            p = presets.get(pid)
+            ev = p["evidence"]
+            assert ev["basis"] == "practitioner"
+            assert any("Link" in s for s in ev["sources"])
+            assert ev["finding"] and ev["caveat"]
+
+    def test_link_persistent_strength_matches_and_rejects(self):
+        from screener import presets
+        n = 300
+        # a PURELY monotonic series has zero down days ever, which makes
+        # RSI's loss term 0 -> NaN (divide-by-zero guard), not a high
+        # finite reading — noise large enough to occasionally flip a
+        # day negative keeps it strongly trending overall (drift
+        # dominates the random walk over 300 bars) while giving RSI
+        # real (high) values to be persistent about.
+        noise = np.random.default_rng(7).normal(0, 0.01, n)
+        strong_up = 100 * np.cumprod(1 + np.full(n, 0.006) + noise)
+        panels = {"STRONG": _mk_ohlcv(strong_up),
+                  "FLAT": sideways_panel()}
+        uni = pd.DataFrame({"symbol": list(panels), "name": list(panels),
+                           "industry": ["Sector A"] * 2})
+        spec = presets.get("link_persistent_strength")["spec"]
+        res = run_screen(panels, spec, universe=uni)
+        assert "STRONG" in set(res["symbol"])
+        assert "FLAT" not in set(res["symbol"])
+
+    def test_link_oscillator_timed_entry_validates_and_describes(self):
+        from screener import presets
+        spec = dsl.validate(
+            presets.get("link_oscillator_timed_entry")["spec"])
+        english = dsl.describe(spec)
+        assert "crossed above" in english and "uptrend" in english
+
+    def test_link_trend_breakout_validates_and_describes(self):
+        from screener import presets
+        spec = dsl.validate(presets.get("link_trend_breakout")["spec"])
+        english = dsl.describe(spec)
+        assert "broke above" in english and "[weekly]" in english
+
+    def test_link_bullish_divergence_validates_and_describes(self):
+        from screener import presets
+        spec = dsl.validate(presets.get("link_bullish_divergence")["spec"])
+        english = dsl.describe(spec)
+        assert "bullish divergence" in english

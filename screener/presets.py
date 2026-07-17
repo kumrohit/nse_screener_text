@@ -630,6 +630,145 @@ PRESETS: list[dict] = [
                       "LITERATURE.md.",
         },
     },
+
+    # ----------------------------------------------------- v0.17 additions
+    # ROADMAP Item 19 — Marcel Link, *High Probability Trading* (2003).
+    # See LITERATURE.md §10 for the full review each of these points back
+    # to. All five are `basis: practitioner` — none earns anything until
+    # it survives the same backtest + cohort gauntlet as the rest.
+    {
+        "id": "link_high_probability_pullback",
+        "name": "Link high-probability pullback (Ch. 10 composite)",
+        "group": "Trend continuation",
+        "description": "Weekly uptrend with a daily pullback to the 50 "
+                       "EMA, RSI neither collapsed nor overbought, and "
+                       "ADX above Link's own strong-trend line (30, "
+                       "stricter than this screener's canonical 25).",
+        "spec": {"logic": "AND", "conditions": [
+            {"type": "trend", "direction": "up", "timeframe": "weekly"},
+            {"type": "support_at_ma", "ma": "ema_50",
+             "tolerance_pct": 1.5, "lookback": 3},
+            {"type": "range", "field": "rsi", "min": 35, "max": 55},
+            {"type": "range", "field": "adx", "min": 30}]},
+        "evidence": {
+            "basis": "practitioner",
+            "sources": ["Link, M. (2003). High Probability Trading."],
+            "finding": "Direct implementation of the book's Chapter 10 "
+                       "flagship composite setup — Link's own claim, "
+                       "not an independently replicated academic "
+                       "result. See LITERATURE.md §10.",
+            "caveat": "Composite of individually-plausible rules; the "
+                      "composite itself is untested folklore until "
+                      "this screener's own backtest/cohort numbers "
+                      "land. The ADX-30 threshold is Link's own "
+                      "convention, not this codebase's canonical "
+                      "ADX-25 'strong trend' bar used elsewhere.",
+        },
+    },
+    {
+        "id": "link_oscillator_timed_entry",
+        "name": "Link oscillator-timed entry",
+        "group": "Trend continuation",
+        "description": "Uptrend with RSI turning up through 40 — the "
+                       "oversold reset caught on the turn, not while "
+                       "still falling — and ADX confirming a strong "
+                       "trend.",
+        "spec": {"logic": "AND", "conditions": [
+            {"type": "trend", "direction": "up"},
+            {"type": "threshold_cross", "field": "rsi", "level": 40,
+             "direction": "above", "lookback": 3},
+            {"type": "range", "field": "adx", "min": 30}]},
+        "evidence": {
+            "basis": "practitioner",
+            "sources": ["Link, M. (2003). High Probability Trading."],
+            "finding": "Chapter 7's 'buy the oversold reset in an "
+                       "uptrend, on the turn, never into it' entry "
+                       "timing rule — see LITERATURE.md §10.",
+            "caveat": "No dedicated academic study of RSI-threshold-"
+                      "cross entry timing reviewed for this document.",
+        },
+    },
+    {
+        "id": "link_trend_breakout",
+        "name": "Link trend breakout",
+        "group": "Breakouts",
+        "description": "A tight-range breakout above resistance on "
+                       "expanded volume, filtered to only fire with "
+                       "the higher (weekly) timeframe already trending "
+                       "up — breakouts in the direction of the major "
+                       "trend work best.",
+        "spec": {"logic": "AND", "conditions": [
+            {"type": "tight_range", "bars": 10, "max_range_pct": 8},
+            {"type": "breakout_resistance", "lookback": 5},
+            {"type": "volume_spike", "min_ratio": 1.5},
+            {"type": "trend", "direction": "up", "timeframe": "weekly"}]},
+        "evidence": {
+            "basis": "practitioner",
+            "sources": ["Link, M. (2003). High Probability Trading."],
+            "finding": "Chapter 8 refinement of a standard "
+                       "breakout-on-volume construction (already used "
+                       "by this screener's breakout_volume preset), "
+                       "adding a higher-timeframe trend filter — see "
+                       "LITERATURE.md §10.",
+            "caveat": "Same unvalidated-breakout-construction caveat "
+                      "as breakout_volume; the added weekly-trend "
+                      "filter narrows the screen further without "
+                      "independent confirmation of the combination's "
+                      "edge.",
+        },
+    },
+    {
+        "id": "link_persistent_strength",
+        "name": "Link persistent strength",
+        "group": "Trend continuation",
+        "description": "RSI pinned at or above 60 for 15 straight bars "
+                       "while the trend holds — a pinned-high "
+                       "oscillator read as trend confirmation, "
+                       "deliberately the opposite of the naive "
+                       "'overbought means sell' read.",
+        "spec": {"logic": "AND", "conditions": [
+            {"type": "persistence", "field": "rsi", "op": ">=",
+             "value": 60, "bars": 15},
+            {"type": "trend", "direction": "up"}]},
+        "evidence": {
+            "basis": "practitioner",
+            "sources": ["Link, M. (2003). High Probability Trading."],
+            "finding": "Chapter 7: an oscillator pinned at an extreme "
+                       "for an extended period signals a strong trend, "
+                       "not an imminent reversal — see LITERATURE.md "
+                       "§10.",
+            "caveat": "Directly contrarian to a naive 'RSI overbought' "
+                      "reading; no dedicated academic study of this "
+                      "exact persistence construction reviewed for "
+                      "this document.",
+        },
+    },
+    {
+        "id": "link_bullish_divergence",
+        "name": "Link bullish divergence",
+        "group": "Reversals",
+        "description": "Price makes a lower low at horizontal support "
+                       "while RSI makes a higher low — momentum fading "
+                       "on the down move. The reversal setup with the "
+                       "weakest evidence basis of this book's screens.",
+        "spec": {"logic": "AND", "conditions": [
+            {"type": "divergence", "kind": "bullish", "oscillator": "rsi",
+             "lookback": 40},
+            {"type": "near_support", "tolerance_pct": 3.0}]},
+        "evidence": {
+            "basis": "practitioner",
+            "sources": ["Link, M. (2003). High Probability Trading."],
+            "finding": "Classic bullish price/oscillator divergence at "
+                       "a support level — see LITERATURE.md §10.",
+            "caveat": "Divergence has the weakest evidence basis of "
+                      "the five Link presets in this codebase: "
+                      "pivot-based divergence detection is itself a "
+                      "discretionary, much-disputed construction with "
+                      "no academic backing reviewed here, on top of "
+                      "the general practitioner caveats the other four "
+                      "presets already carry.",
+        },
+    },
 ]
 
 # Which universes a preset is meaningful on (ROADMAP Item 15 follow-up).

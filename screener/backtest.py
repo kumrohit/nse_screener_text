@@ -91,9 +91,12 @@ SENSITIVITY_HORIZON = 20
 
 # The expensive set: O(lookback) per bar (pivot search) or requiring a
 # universe-wide rank rebuild — computed on a `stride`-bar date grid with
-# forward-fill rather than every bar. See module docstring.
+# forward-fill rather than every bar. See module docstring. `divergence`
+# joins this set for the same reason as near_support/near_resistance: a
+# pivot search over its own lookback window, every bar.
 EXPENSIVE_SYMBOL_TYPES = {"near_support", "near_resistance",
-                          "breakout_resistance", "bb_squeeze"}
+                          "breakout_resistance", "bb_squeeze",
+                          "divergence"}
 EXPENSIVE_CROSS_TYPES = {"rs_percentile", "sector_rank",
                          "atr_pct_percentile"}
 
@@ -324,6 +327,28 @@ def _vec_rel_strength(panel, c, benchmark: pd.Series | None):
            ).fillna(False)
 
 
+def _vec_threshold_cross(panel, c):
+    lb = int(c.get("lookback", 3))
+    level = float(c["level"])
+    s = panel[c["field"]]
+    prev = s.shift(1)
+    valid = s.notna() & prev.notna()
+    if c["direction"] == "above":
+        crossed = (prev <= level) & (s > level)
+    else:
+        crossed = (prev >= level) & (s < level)
+    crossed = (crossed & valid).fillna(False).astype(int)
+    return crossed.rolling(lb, min_periods=1).max().astype(bool)
+
+
+def _vec_persistence(panel, c):
+    bars = int(c["bars"])
+    s = panel[c["field"]]
+    ok = (_apply_op(s, c["op"], float(c["value"])) & s.notna()
+         ).fillna(False).astype(int)
+    return ok.rolling(bars, min_periods=bars).min().fillna(0) > 0
+
+
 def _vec_sector(panel, c, symbol, sector_by_symbol):
     if sector_by_symbol is None or symbol is None:
         raise RuntimeError(
@@ -339,6 +364,8 @@ _CHEAP_DISPATCH = {
     "support_at_ma": _vec_support_at_ma, "volume_spike": _vec_volume_spike,
     "gap": _vec_gap, "tight_range": _vec_tight_range,
     "flat_base": _vec_flat_base, "candle": _vec_candle,
+    "threshold_cross": _vec_threshold_cross,
+    "persistence": _vec_persistence,
 }
 
 
@@ -358,7 +385,8 @@ def _stride_symbol_series(panel: pd.DataFrame, c: dict, ctype: str,
     fn = {"near_support": evaluator.cond_near_support,
          "near_resistance": evaluator.cond_near_resistance,
          "breakout_resistance": evaluator.cond_breakout_resistance,
-         "bb_squeeze": evaluator.cond_bb_squeeze}[ctype]
+         "bb_squeeze": evaluator.cond_bb_squeeze,
+         "divergence": evaluator.cond_divergence}[ctype]
     sample_vals = np.array([bool(fn(panel, c, i)) for i in idx_samples])
     return _asof_map(panel.index, panel.index[idx_samples], sample_vals)
 

@@ -48,6 +48,24 @@ def atr(df: pd.DataFrame, n: int = 14) -> pd.Series:
                               min_periods=n).mean()
 
 
+def stochastic(df: pd.DataFrame, n: int = 14, smooth_k: int = 3,
+               smooth_d: int = 3) -> pd.DataFrame:
+    """Slow stochastic oscillator (Link 2003 Ch. 6's 14-3-3 convention —
+    ROADMAP Item 19). Raw %K = 100·(close-LLn)/(HHn-LLn); slow %K =
+    SMAsmooth_k(raw %K) (the "slow" stochastic, not raw/fast); %D =
+    SMAsmooth_d(slow %K). Zero range (HHn == LLn) -> NaN, fails closed
+    rather than dividing by zero."""
+    hh = df["high"].rolling(n, min_periods=n).max()
+    ll = df["low"].rolling(n, min_periods=n).min()
+    rng = hh - ll
+    with np.errstate(invalid="ignore", divide="ignore"):
+        raw_k = 100 * (df["close"] - ll) / rng
+    raw_k = raw_k.where(rng != 0)
+    slow_k = raw_k.rolling(smooth_k, min_periods=smooth_k).mean()
+    d = slow_k.rolling(smooth_d, min_periods=smooth_d).mean()
+    return pd.DataFrame({"stoch_k": slow_k, "stoch_d": d})
+
+
 def adx(df: pd.DataFrame, n: int = 14) -> pd.DataFrame:
     up = df["high"].diff()
     dn = -df["low"].diff()
@@ -86,6 +104,10 @@ def compute_panel(df: pd.DataFrame) -> pd.DataFrame:
     out["atr"] = atr(out, config.ATR_PERIOD)
     out["atr_pct"] = 100 * out["atr"] / c
     out = out.join(adx(out, config.ADX_PERIOD))
+    out["adx_slope"] = out["adx"].diff(5)  # 5-bar slope, same convention
+                                            # as the EMA/SMA slopes above
+    out = out.join(stochastic(out, config.STOCH_PERIOD,
+                              config.STOCH_SMOOTH_K, config.STOCH_SMOOTH_D))
 
     macd_line = ema(c, 12) - ema(c, 26)
     out["macd"] = macd_line

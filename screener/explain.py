@@ -267,6 +267,67 @@ def _ex_breadth(panel, c, i, breadth):
                "pct_at_20d_high": _f(pct_hi, 1) if pct_hi is not None else None}
 
 
+def _ex_threshold_cross(panel, c, i):
+    lb = int(c.get("lookback", 3))
+    level = float(c["level"])
+    s = panel[c["field"]]
+    lo = max(1, i - lb + 1)
+    cross_j = None
+    for j in range(lo, i + 1):
+        prev, cur = s.iloc[j - 1], s.iloc[j]
+        if pd.isna(prev) or pd.isna(cur):
+            continue
+        if (c["direction"] == "above" and prev <= level < cur) or \
+           (c["direction"] == "below" and prev >= level > cur):
+            cross_j = j
+    if cross_j is None:
+        ev = (f"no {c['direction']}-cross of {c['field']} through "
+              f"{level} in last {lb} bars (current {_f(s.iloc[i])})")
+        return ev, {}
+    ev = (f"{c['field']} crossed {c['direction']} {level} on "
+          f"{_date(panel, cross_j)} ({_f(s.iloc[cross_j - 1])} → "
+          f"{_f(s.iloc[cross_j])})")
+    return ev, {"cross_date": _date(panel, cross_j)}
+
+
+def _ex_persistence(panel, c, i):
+    bars = int(c["bars"])
+    lo = i - bars + 1
+    if lo < 0:
+        return "insufficient history for persistence window", {}
+    win = panel[c["field"]].iloc[lo: i + 1]
+    ev = (f"{c['field']} over last {bars} bars: min {_f(win.min())}, "
+          f"max {_f(win.max())} (need all {c['op']} {c['value']})")
+    return ev, {"min": _f(win.min()), "max": _f(win.max())}
+
+
+def _ex_divergence(panel, c, i):
+    from . import sr
+    lb = int(c.get("lookback", 40))
+    osc_field = c["oscillator"]
+    lo = max(0, i - lb + 1)
+    win = panel.iloc[lo: i + 1]
+    if len(win) < 2 * sr.PIVOT_K + 1:
+        return f"insufficient history for a {lb}-bar pivot search", {}
+    ph, pl = sr.find_pivots(win, k=sr.PIVOT_K)
+    bullish = c["kind"] == "bullish"
+    mask = pl if bullish else ph
+    price_field = "low" if bullish else "high"
+    pivot_dates = list(win.index[mask])
+    if len(pivot_dates) < 2:
+        return (f"fewer than two confirmed {price_field} pivots in last "
+               f"{lb} bars", {})
+    p1, p2 = pivot_dates[-2], pivot_dates[-1]
+    price1, price2 = win[price_field].loc[p1], win[price_field].loc[p2]
+    osc1, osc2 = win[osc_field].loc[p1], win[osc_field].loc[p2]
+    ev = (f"pivot {price_field}s: {p1.date()} {_f(price1)} "
+          f"({osc_field} {_f(osc1)}) → {p2.date()} {_f(price2)} "
+          f"({osc_field} {_f(osc2)})")
+    return ev, {"pivot1_date": str(p1.date()), "pivot1_price": _f(price1),
+               "pivot1_osc": _f(osc1), "pivot2_date": str(p2.date()),
+               "pivot2_price": _f(price2), "pivot2_osc": _f(osc2)}
+
+
 _EXPLAINERS = {
     "compare": _ex_compare, "proximity": _ex_proximity, "trend": _ex_trend,
     "support_at_ma": _ex_support_at_ma, "cross": _ex_cross,
@@ -274,6 +335,9 @@ _EXPLAINERS = {
     "change": _ex_change, "near_support": _ex_near_support,
     "near_resistance": _ex_near_resistance,
     "breakout_resistance": _ex_breakout_resistance,
+    "threshold_cross": _ex_threshold_cross,
+    "persistence": _ex_persistence,
+    "divergence": _ex_divergence,
 }
 
 
