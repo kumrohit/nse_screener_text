@@ -41,7 +41,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 
 from . import (allocate, backtest, cohort_perf, cohorts as cohorts_mod,
-              config, dsl, evaluator, explain, indicators, universes)
+              config, dsl, evaluator, explain, panel_store, universes)
 
 app = FastAPI(title="NSE Text Screener")
 
@@ -98,7 +98,7 @@ def _load_state(universe_id: str = universes.DEFAULT_UNIVERSE) -> dict:
             latest = data_ingest.assert_fresh(prices)
             entry.update(
                 mode="live",
-                panels=indicators.build_panels(prices),
+                panels=panel_store.load_or_build(universe_id, prices=prices),
                 universe=uni_mod.fetch_universe(universe_id=universe_id),
                 benchmark=data_ingest.load_benchmark(universe_id),
                 as_of=str(latest.date()),

@@ -114,9 +114,7 @@ def _clean(prices: pd.DataFrame) -> pd.DataFrame:
     return p.loc[~bad].sort_values(["symbol", "date"]).reset_index(drop=True)
 
 
-def assert_fresh(prices: pd.DataFrame) -> pd.Timestamp:
-    """Fail loud if the store is stale. Returns latest bar date."""
-    latest = prices["date"].max()
+def _assert_fresh_date(latest: pd.Timestamp) -> pd.Timestamp:
     age = (pd.Timestamp.today().normalize() - latest).days
     if age > config.MAX_STALENESS_DAYS:
         raise RuntimeError(
@@ -124,6 +122,20 @@ def assert_fresh(prices: pd.DataFrame) -> pd.Timestamp:
             "old. Run `python -m screener.cli update` first."
         )
     return latest
+
+
+def assert_fresh(prices: pd.DataFrame) -> pd.Timestamp:
+    """Fail loud if the store is stale. Returns latest bar date."""
+    return _assert_fresh_date(prices["date"].max())
+
+
+def assert_fresh_panels(panels: dict[str, pd.DataFrame]) -> pd.Timestamp:
+    """Same staleness check as `assert_fresh`, from already-built panels
+    instead of a raw prices frame (ROADMAP Item 20 P1) — the
+    indicator-cache hit path never reads prices.parquet at all, so
+    there's no `prices` frame to check here."""
+    latest = max(p.index[-1] for p in panels.values())
+    return _assert_fresh_date(latest)
 
 
 # ---------------------------------------------------------------- benchmark

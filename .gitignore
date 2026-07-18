@@ -9,6 +9,10 @@ data/config_local.toml
 data/*/*.parquet
 data/*/*.csv
 data/*/*.jsonl
+# indicator-panel cache sidecar (ROADMAP Item 20 P1) — .json, not .jsonl,
+# so it needs its own line; the .parquet line above already covers the
+# cache file itself
+data/*/*.meta.json
 # versioned evidence backups (ROADMAP Item 18 v1.0 hardening) — local
 # only, rotated to 30; the off-machine copy is a manual step, not this
 data/backups/

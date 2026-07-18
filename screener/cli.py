@@ -42,11 +42,36 @@ def _load_prices(universe_id: str = universes.DEFAULT_UNIVERSE
     return pd.read_parquet(store)
 
 
+def _panels(universe_id: str = universes.DEFAULT_UNIVERSE,
+           prices: pd.DataFrame | None = None) -> dict[str, pd.DataFrame]:
+    """Cached indicator panels for a universe (ROADMAP Item 20 P1) — the
+    one path every CLI command uses instead of loading prices and
+    calling indicators.build_panels() directly. On a cache hit this
+    never touches prices.parquet at all; pass an already-loaded
+    `prices` (e.g. `cmd_verify`, which needs the raw frame for its own
+    checks regardless) so a cache miss doesn't read it twice."""
+    from . import panel_store
+    try:
+        return panel_store.load_or_build(universe_id, prices=prices)
+    except FileNotFoundError as exc:
+        sys.exit(str(exc))
+
+
+def _write_through_panel_cache(universe_id: str, prices: pd.DataFrame) -> None:
+    """Rebuild and cache panels right after prices change (ROADMAP Item
+    20 P1's write-through design: the nightly `update`/`backfill` pays
+    the build_panels cost once, so every interactive command after it
+    only ever loads)."""
+    from . import panel_store
+    panel_store.save(universe_id, indicators.build_panels(prices))
+
+
 def cmd_backfill(args) -> None:
     universe_id = getattr(args, "universe", universes.DEFAULT_UNIVERSE)
     uni = universe.fetch_universe(force_refresh=True, universe_id=universe_id)
     prices = data_ingest.full_backfill(uni, universe_id=universe_id)
     data_ingest.fetch_benchmark(universe_id=universe_id)
+    _write_through_panel_cache(universe_id, prices)
     print(f"Backfilled {prices['symbol'].nunique()} symbols, "
           f"{len(prices):,} rows, "
           f"{prices['date'].min().date()} → {prices['date'].max().date()}")
@@ -57,6 +82,7 @@ def cmd_update(args) -> None:
     uni = universe.fetch_universe(universe_id=universe_id)
     prices = data_ingest.incremental_update(uni, universe_id=universe_id)
     data_ingest.fetch_benchmark(universe_id=universe_id)
+    _write_through_panel_cache(universe_id, prices)
     print(f"Store now ends {prices['date'].max().date()}")
 
 
@@ -78,7 +104,7 @@ def cmd_verify(args) -> None:
                   "\ncomes back adjusted:"
                   "\n  python -m screener.cli refetch SYMBOL")
         return
-    panels = indicators.build_panels(prices)
+    panels = _panels(universe_id, prices=prices)
     bhav_prices = (pd.read_parquet(config.BHAVCOPY_STORE)
                   if config.BHAVCOPY_STORE.exists() else None)
     from .webapp import LOG_FILE, ROTATED_LOG_FILE
@@ -188,9 +214,8 @@ def cmd_screen(args) -> None:
     warning = evaluator.sector_data_gap_warning(spec, uni)
     if warning:
         print(f"WARNING: {warning}")
-    prices = _load_prices(universe_id)
-    latest = data_ingest.assert_fresh(prices)
-    panels = indicators.build_panels(prices)
+    panels = _panels(universe_id)
+    latest = data_ingest.assert_fresh_panels(panels)
     result = evaluator.run_screen(
         panels, spec, universe=uni,
         min_turnover_cr=config.liquidity_gate_cr(universe_id),
@@ -239,9 +264,8 @@ def cmd_backtest(args) -> None:
     warning = evaluator.sector_data_gap_warning(spec, uni)
     if warning:
         print(f"WARNING: {warning}")
-    prices = _load_prices(universe_id)
-    data_ingest.assert_fresh(prices)
-    panels = indicators.build_panels(prices)
+    panels = _panels(universe_id)
+    data_ingest.assert_fresh_panels(panels)
     result = bt.backtest_spec(
         panels, uni, spec, horizons=tuple(args.horizons),
         cooldown=args.cooldown, cost_pct=args.cost_pct,
@@ -328,8 +352,7 @@ def cmd_cohort_create(args) -> None:
     weights = cohorts_mod.weights_from_symbols(symbols)
     panels = None
     if getattr(args, "as_of", None):
-        prices = _load_prices(universe_id)
-        panels = indicators.build_panels(prices)
+        panels = _panels(universe_id)
     try:
         cohort = cohorts_mod.create_cohort(
             universe_id=universe_id, spec=spec, symbols=symbols,
@@ -346,8 +369,7 @@ def cmd_cohort_create(args) -> None:
 def cmd_cohort_list(args) -> None:
     from . import cohorts as cohorts_mod
     universe_id = getattr(args, "universe", universes.DEFAULT_UNIVERSE)
-    prices = _load_prices(universe_id)
-    panels = indicators.build_panels(prices)
+    panels = _panels(universe_id)
     lst = cohorts_mod.list_cohorts(universe_id, panels,
                                    config.liquidity_gate_cr(universe_id))
     if not lst:
@@ -362,8 +384,7 @@ def cmd_cohort_list(args) -> None:
 def cmd_cohort_show(args) -> None:
     from . import cohorts as cohorts_mod
     universe_id = getattr(args, "universe", universes.DEFAULT_UNIVERSE)
-    prices = _load_prices(universe_id)
-    panels = indicators.build_panels(prices)
+    panels = _panels(universe_id)
     c = cohorts_mod.get_cohort(universe_id, args.cohort_id, panels,
                                config.liquidity_gate_cr(universe_id))
     if c is None:
@@ -419,8 +440,7 @@ def cmd_cohort_perf(args) -> None:
     and replay cohorts."""
     from . import cohort_perf, cohorts as cohorts_mod, data_ingest
     universe_id = getattr(args, "universe", universes.DEFAULT_UNIVERSE)
-    prices = _load_prices(universe_id)
-    panels = indicators.build_panels(prices)
+    panels = _panels(universe_id)
     c = cohorts_mod.get_cohort(universe_id, args.cohort_id, panels,
                                config.liquidity_gate_cr(universe_id))
     if c is None:
@@ -474,8 +494,7 @@ def cmd_scorecard(args) -> None:
     except KeyError:
         pass  # not a known preset id — treat the argument as a raw spec_hash
 
-    prices = _load_prices(universe_id)
-    panels = indicators.build_panels(prices)
+    panels = _panels(universe_id)
     from .webapp import BACKTEST_LOG_FILE, migrate_backtest_log_entry
     log_entries = []
     if BACKTEST_LOG_FILE.exists():

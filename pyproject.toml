@@ -19,3 +19,7 @@ dev = ["pytest>=8.0"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+addopts = "-m 'not perf'"
+markers = [
+  "perf: performance-regression benchmarks (ROADMAP Item 20 P5) — excluded from the default run by addopts above; invoke explicitly with `pytest -m perf`",
+]

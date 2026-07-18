@@ -489,6 +489,150 @@ backtest of `link_persistent_strength` finding 2,902 historical events in
 12.6s engine time, so the spec does fire over time, just not today);
 vectorizer-consistency checks against real data as described above.
 
+## 12m. Indicator-panel cache (v0.18, ROADMAP Item 20 P1) — the recomputation fix
+
+Measured (ROADMAP Item 20, 2026-07-13): `indicators.build_panels()` costs
+**17.7s on 500 symbols** (~35ms/symbol; ~71s on nse_full's 2,047) —
+recomputed from raw prices on **every single interactive invocation**: 7
+CLI call sites (`screen`, `backtest`, `verify`, `cohort create/list/show/
+perf`, `scorecard`) plus every webapp cold start. Screening itself is
+fast (0.1–1.5s) — the diagnosis is recomputation, not computation (a
+profile of `compute_panel` shows no dominant hot spot, just ~40 fixed-
+overhead pandas ops per symbol). `config.py` had declared an
+`INDICATOR_STORE` cache constant since v0.1; nothing ever implemented it.
+
+**`screener/panel_store.py` — the cache.** One per-universe long-format
+parquet snapshot (`config.indicator_store(universe_id)` =
+`data/{universe}/indicators.parquet`, unconditional per-universe-directory
+convention, same as `cohorts_file` — the old flat, wide-snapshot-shaped
+`INDICATOR_STORE` constant was dead code with the wrong shape, removed
+outright, nothing on disk in that shape to migrate) plus a tiny JSON
+sidecar (`indicators.meta.json`) recording `SCHEMA_VERSION` and the price
+store's own mtime at save time — the invalidation key. Checking cache
+validity is therefore **one `os.stat()` call**, never a parquet read of
+either file. `load_or_build(universe_id, prices=None)` is the one entry
+point: a HIT returns cached panels without ever touching `prices` (the
+caller's `prices` argument, if given, is simply ignored); a MISS builds
+from `prices` (reading the price store first if the caller didn't already
+have it loaded) and writes the cache before returning, so the cost is
+paid once, not on every command.
+
+**A real disk-space trade-off, measured, not assumed.** The cache is
+*bigger* than the raw price store it's derived from — `compute_panel`
+adds ~48 derived columns (EMAs/SMAs+slopes, RSI, ADX+slope, stochastics,
+MACD, Bollinger, ROC family, 52-week levels, turnover) on top of the 5
+OHLCV ones, so the on-disk footprint scales with column count, not just
+row count: nifty500's real 500-symbol/5-year store measured **20.7MB
+raw → 210.9MB cached** (~10×; nse_full's larger universe would be
+proportionally larger again). Tried `zstd` compression against the
+default `snappy`: only ~6% smaller (197.6MB) for comparable write time
+— not worth the added complexity, since the size driver is genuinely
+column count, not compression inefficiency. This is the deliberate
+time-for-space trade this whole item exists to make; worth knowing
+before enabling it on a disk-constrained machine, not a defect.
+
+**Write-through, not lazy-only.** `cmd_backfill`/`cmd_update` (`cli.py`)
+call a shared `_write_through_panel_cache()` right after writing fresh
+prices — the nightly cron pays the `build_panels` cost once, so every
+interactive command after it only ever loads. A cold miss (first run
+after a manual price-file edit, or a machine that skipped a nightly
+update) still works correctly via `load_or_build`'s build-then-save
+fallback — just slower that one time.
+
+**Every call site routes through one helper.** `cli.py`'s `_panels(universe_id,
+prices=None)` wraps `panel_store.load_or_build`, translating a missing-
+price-store `FileNotFoundError` into the same clean `sys.exit` message
+`_load_prices` always gave — all 7 CLI call sites use it instead of
+`_load_prices()` + `indicators.build_panels()` directly (`cmd_verify` still
+loads `prices` itself, for its own raw OHLCV integrity checks, and passes
+it through so a cache miss there doesn't read the store twice; the
+other 6 don't need `prices` for anything beyond panels, so on a cache hit
+they never read it at all). `webapp._load_state()` composes cleanly with
+its own existing in-process cache (the P0 stale-server fix from §12a):
+that layer's `_mtime`-keyed check already gates whether the heavy branch
+runs at all; inside it, `panel_store.load_or_build(universe_id,
+prices=prices)` replaces the direct `indicators.build_panels(prices)` call.
+
+**Staleness checking without reading prices.** `data_ingest.assert_fresh()`
+only ever needed `prices["date"].max()` — refactored into a shared
+`_assert_fresh_date()` plus a new sibling, `assert_fresh_panels(panels)`,
+which takes the max index date across already-built panels instead. The
+cache-hit path (`cmd_screen`/`cmd_backtest`) uses the panels sibling, so
+staleness checking never forces a prices read either.
+
+**Self-healing, not fragile.** The invalidation key is purely the price
+store's mtime — `cmd_refetch` (the one-symbol unadjusted-data remedy)
+rewrites `prices.parquet` in place without knowing the cache exists at
+all, and needs no special-casing: the mtime changes, the next `_panels()`
+call sees a stale cache, and rebuilds automatically.
+
+**Verification.** 12 new tests in `tests/test_panel_store.py`: the
+cache-equivalence guarantee (cached-loaded panels equal freshly built
+ones exactly, `pd.testing.assert_frame_equal` per symbol — the "a schema
+change without a version bump fails CI" requirement); a cache hit
+genuinely never calls `pd.read_parquet` on the price store (guarded by
+path, not a blanket patch, since the indicator cache's own parquet still
+needs a real read); invalidation on price-store mtime change, on a
+`SCHEMA_VERSION` bump, and on a missing/corrupted meta sidecar (a clean
+miss, not a crash); per-universe cache isolation; a clear
+`FileNotFoundError` on a total miss (no price store, no cache). The
+first of two real bugs caught before shipping, both in the tests
+themselves, not the implementation: `config.price_store()`/
+`universe_file()`/`benchmark_store()`
+defer to plain `PRICE_STORE`/`UNIVERSE_FILE`/`BENCHMARK_STORE` attributes
+for the DEFAULT universe specifically (kept so existing
+`monkeypatch.setattr(config, "PRICE_STORE", ...)`-style fixtures keep
+working) — bound once at real-`DATA_DIR` import time, the exact same
+gotcha `tests/conftest.py`'s `_force_demo_mode` fixture already exists to
+work around. A first-draft test fixture patched only `config.DATA_DIR`,
+which does **not** redirect a `"nifty500"`-universe price-store path — a
+test seeding synthetic prices under that id would have written into the
+real local `data/nifty500/prices.parquet` on any dev machine with one
+(caught before merging by inspecting the real store's row/symbol count
+immediately after a full suite run, not by the test itself — the test
+would have passed either way, self-consistently reading back whatever it
+had just written). Fixed by patching all three attributes, matching
+`_force_demo_mode`'s established pattern exactly.
+
+**A second real bug, in an existing test, not the implementation.**
+`tests/test_evaluator.py`'s pre-existing `TestStaleServerFix` class
+(§12a, ROADMAP Item 6/P0) monkeypatches `config.PRICE_STORE` alone to
+simulate a live store — a pattern that was always safe before, since
+`build_panels()` was purely in-memory with no disk footprint. P1 gave
+`_load_state()` a genuine write side effect (the indicator cache) for
+the first time, and `config.indicator_store()` has no `PRICE_STORE`-
+style attribute indirection (it derives from live `DATA_DIR` always,
+`cohorts_file()`-style) — so this test, unpatched, would have written a
+tiny/empty indicator cache (its synthetic fixture uses a single
+under-60-bar symbol, so `build_panels` legitimately returns `{}` for
+it) into the REAL `data/nifty500/indicators.parquet`, corrupting the
+real cache for every subsequent command until the next `update`. Caught
+by running the full suite twice and diffing the real store's row/symbol
+count before and after — not by either test itself, both of which pass
+either way, self-consistently reading back whatever they'd just
+written. Fixed by adding `monkeypatch.setattr(config, "DATA_DIR",
+tmp_path)` alongside the existing `PRICE_STORE` patch in both affected
+tests.
+
+**Live-verified against the real 500-symbol nifty500 store.** Absolute
+times below were measured under this session's exceptional, unrelated
+I/O contention (a laptop-wide iCloud "Optimize Storage" episode that
+inflated every disk read that night — noted for transparency, not
+representative of normal hardware) — the *relative* speedup and the
+*correctness* check are the numbers that matter and aren't affected by
+that noise: raw `prices.parquet` read 28.1s, `indicators.build_panels()`
+41.1s (cold, direct — no cache involved) → **cache hit 4.0s first call,
+1.7s second call, a 10–24× speedup** — while never reading
+`prices.parquet` at all. A `pd.testing.assert_frame_equal` sweep over
+all 500 real symbols' cached-vs-freshly-built panels found **zero
+mismatches** — the cache-equivalence guarantee holding on real data, not
+just the synthetic fixture. `cmd_verify`'s own report is unaffected
+(same 14 checks, same PASS/WARN counts) since it still reads `prices`
+for its own integrity checks regardless of the panel cache. See ROADMAP
+Item 20 for the P2 (parallel rebuild)/P3 (webapp evaluate-first)
+follow-ons this session didn't scope in — P1 alone removes the
+dominant cost.
+
 ## 13. Roadmap
 
 Completed from the Phase 3 plan: pattern/consolidation conditions with the preset library (item 1), the workflow layer — as-of replay, evidence sparklines, screen log (item 4) — **sector and relative-strength extensions (item 2)**: industry as a filter (`sector`), per-stock RS percentile vs the universe (`rs_percentile`), and equal-weight sector momentum ranking (`sector_rank`, top or bottom N), all built on the cross-sectional pre-pass (§6a) — the full **v0.7 track**: **robustness hardening (item 6, §12a)** and **UI depth (item 5, §12b)** — **evidence-based strategy presets (item 9, §12c)**: `LITERATURE.md`, the `evidence` schema on all 26 presets, and 7 new literature-grounded presets built on new indicators (`mom_12_1`, `roc_126`/`roc_252`, `sma_150`+slopes, `atr_pct_percentile`) — and **portfolio allocation (item 10, §12d)**: fixed-fractional risk sizing, inverse-volatility weights, and an always-shown 1/N baseline (`allocate.py`, `/api/allocate`, an "Allocate" UI panel), turning a result set into integer-share position sizes with documented, explicitly non-optimising methodology; an aggregate-capital-cap bug was caught via live testing before shipping — and **UI professional redesign (item 11, §12e), shipped in part**: monolith split, a documented design-token system, an accessibility floor, toasts, print/report mode, and a committed Playwright visual-regression baseline. **Deferred by explicit decision**: the persistent-sidebar layout restructure (§12e) — judged the highest-risk remaining piece with unclear payoff relative to what already shipped this cycle; revisit as its own scoped effort. **Screen backtester (item 14, §12f) shipped**: `screener/backtest.py`, `POST /api/backtest`, a "🧪 backtest" UI panel, and a `backtest` CLI command turn any DSL spec into an event study (cooldown-deduped events, entry at open[t+1], same-date universe baseline, gross/net costs, date-level block bootstrap, a <30-event suppression floor, an auto-detected sensitivity grid, a survivorship caveat everywhere) — vectorized for cheap conditions, a measured-and-adjusted `stride=20` date grid for the expensive ones. **Deferred, not struck**: the preset evidence loop-closure (item 14's own follow-on — adding each of the 26 presets' own backtest summary to its evidence object). **Universe registry (item 15 Phase A, §12g) complete**: `screener/universes.py` now holds `nifty500`, `nse_full` (2,047 symbols, real yfinance backfill run, ₹2cr liquidity gate), and `nse_etf` (36 curated broad equity-index ETFs, ₹0.1cr gate); per-universe storage, `--universe` on the CLI, a webapp header selector (`GET /api/universes`, `POST /api/universe`), a measured and passing hard memory gate (782 MB, no on-demand/LRU rearchitecture needed), a sector-data-gap warning (a sector-based screen on a universe with no industry data now warns loudly instead of silently returning zero matches), and preset `universes` tags computed from spec content with live-verified dropdown filtering. **Unparked, calendar-gated: (3) NSE bhavcopy migration** (§4a) — the ingestion, delivery %, and corporate-action adjustment pipeline are built and validated against live data; a `verify` cross-source consistency check is live and side-by-side data collection has started (2026-07-05). What's left is calendar-gated, not code-gated: ~2 weeks of side-by-side evidence before cutover can even be considered, then the `delivery` DSL condition/vocabulary/preset (deliberately deferred until after cutover), the config-flag cutover itself, and adding `bhavcopy-update` to the nightly cron. **Deferred indefinitely**: nested boolean logic (until a real query demands it), monthly timeframe (weekly machinery generalises trivially), intraday (out of scope by design). **Cohort tracker (item 16, §12h) complete**: `screener/cohorts.py` — the out-of-sample complement to the item-14 backtester, freezing matches (or a sized allocation) at signal time and tracking them forward at the identical horizons/baseline/entry convention, survivorship-free by construction (stale/delisted symbols carried forward, never dropped); a per-spec scorecard joins OOS cohorts against IS backtests on spec_hash *and* universe; three surfaces (UI, API, CLI); two real logging bugs caught and fixed along the way. Cohorts seeded from all four named presets on both `nifty500` and `nse_full` per the sequencing plan. **Cohort replay & performance engine (item 17, §12i) complete**: `screener/cohort_perf.py` — a cohort can now be created as of any historical date (`as_of`) instead of only "starting now," and every cohort (replay or forward) gets a full performance panel over an arbitrary window (cumulative return, excess vs. baseline/Nifty, vol, max drawdown with dates, hit rates, weighted contributors, an equity curve indexed to 100 at entry) rather than just the fixed 5/20/60-bar milestones; the integrity wall keeps replay cohorts (in-sample by construction) out of the OOS scorecard entirely. A real race condition was caught via live Playwright testing (a slower, now-stale in-flight fetch could silently overwrite a newer one) and fixed. **Market breadth regime fields (item, §12j, ROADMAP §C) complete**: `pct_above_200dma`/`pct_at_20d_high` computed from the universe itself, a new `breadth` condition wired through screening, evidence, and an exact (not stride-approximated) vectorized backtester path — shipped standalone, decoupled from the nse_full-vs-nifty500 preset comparison it was paired with, since that comparison stays blocked on pre-registered hypotheses. **Cohort deletion, two-tier (v0.15.2)**: revises the original plain hard-delete once it was clear that erasing a forward cohort past its entry bar would let a losing OOS record be quietly curated away — replay/pending cohorts still hard-delete, forward cohorts at/past entry are now tombstoned (kept, hidden, counted on the scorecard with a required reason). **v1.0 hardening (Item 18, §12k) — two of three complete**: evidence backup (`backup.py`, rotated local snapshots, a `verify` check, a documented off-machine copy step) and schema versioning (`SCHEMA_VERSION`/`migrate_record()` for cohorts and both logs, migrate-and-persist rather than migrate-on-every-read) both shipped in v0.16.1. The third, docs completeness, turned out narrower than the item's own spec assumed — cohorts/replay/deletion/breadth already had substantial §12h–§12j prose, not "changelog-only" as originally written; what remained was this section, the README/§11 refreshes above, and the LITERATURE.md evidence numbers, which stay correctly deferred until the nifty500-vs-nse_full comparison run actually lands. **Link (2003) practitioner screens (item 19, §12l) complete**: full-book review translated into `stoch_k`/`stoch_d`/`adx_slope` engine fields, three new condition types (`threshold_cross`, `persistence`, `divergence` — the last reusing `sr.find_pivots` and joining the backtester's expensive/stride-grid set), and five practitioner-tagged presets, each explicitly gated on this codebase's own backtest/cohort evidence gauntlet before earning anything more than a "practitioner" label. Divergence — the item's own named risk — shipped intact, not weakened, with zero vectorizer-consistency mismatches against the real 500-symbol store.
@@ -496,6 +640,7 @@ Completed from the Phase 3 plan: pattern/consolidation conditions with the prese
 ## 14. Changelog
 
 0.1 — Data layer (Nifty 500, yfinance 5y, Parquet), daily indicator engine, 8-condition DSL with validation and English echo, LLM parser with canonical vocabulary, CLI, 16 synthetic tests.
+0.18.0 — Indicator-panel cache, P1 (ROADMAP Item 20, §12m): `screener/panel_store.py` — the `INDICATOR_STORE` cache declared since v0.1 and never implemented, finally built. `indicators.build_panels()` (17.7s measured on 500 symbols) used to be recomputed on every one of 7 CLI call sites and every webapp cold start; now a per-universe long-format parquet snapshot plus a JSON sidecar (schema version + the price store's own mtime, the invalidation key) makes a cache-validity check one `os.stat()` call, and a hit never reads `prices.parquet` at all. Write-through on `backfill`/`update`; every CLI call site and `webapp._load_state()` route through one `load_or_build()`/`_panels()` path; `data_ingest.assert_fresh_panels()` lets the cache-hit path skip the raw-prices staleness check too. Two real bugs caught before shipping, both in tests, not the implementation: a first-draft cache fixture that would have written synthetic data into the real local price store (the exact `PRICE_STORE`-bound-at-import-time gotcha `_force_demo_mode` already exists for), and a pre-existing `TestStaleServerFix` test that — only after P1 gave `_load_state()` a real disk-write side effect for the first time — would have overwritten the real indicator cache with an empty one. 12 new tests (`tests/test_panel_store.py`) plus a P5 performance-regression harness (`tests/perf_bench.py`, `pytest -m perf`, excluded from the default run). 395 tests. Live-verified against the real 500-symbol store: cache hit 10-24× faster than a cold rebuild, zero mismatches across all 500 symbols' cached-vs-freshly-built panels.
 0.17.0 — Link (2003) practitioner screens (ROADMAP Item 19, §12l, LITERATURE.md §10): full-book review of Marcel Link's *High Probability Trading* translated into `stoch_k`/`stoch_d` (fixed slow 14-3-3 stochastic) and `adx_slope` engine fields; three new condition types — `threshold_cross` (field crosses a constant level within a window, catching the turn), `persistence` (every bar in a window satisfies a comparison — an oscillator pinned at an extreme reads as trend confirmation, not reversal), `divergence` (two confirmed fractal pivots via the existing `sr.find_pivots`, strict price/oscillator inequalities on both legs, reusing no new pivot machinery) — vectorized cheap for the first two, expensive-set stride-grid for divergence (the same cost profile as `near_support`); five practitioner-tagged presets (`link_high_probability_pullback`, `link_oscillator_timed_entry`, `link_trend_breakout`, `link_persistent_strength`, `link_bullish_divergence`); an explicit skip list (diagonal trendlines, Fibonacci levels, price targets, multi-timeframe — already shipped) recorded with reasons rather than silently dropped; parser vocabulary with a hard refusal rule on bare "divergence" (never guess bullish vs. bearish); 5 new golden fixtures (29 total). 29 new tests. 383 tests. Live-verified against the real 500-symbol store: all five presets ran cleanly, vectorizer-consistency held with zero mismatches on all three new condition types (100/100, 100/100, 60/60), and a real-data backtest of `link_persistent_strength` found 2,902 historical events.
 0.16.1 — Evidence backup + schema versioning (ROADMAP Item 18, v1.0 hardening, §12k): `screener/backup.py` — versioned local snapshots of cohort/screen/allocation/backtest logs, watchlist, and saved presets (deliberately excludes regenerable prices/universe data) into `data/backups/<ts>/`, rotated to the 30 most recent; `verify_latest_backup()` checks existence and per-file JSONL parseability, wired into `verify` as a 14th check (WARN if missing, FAIL if corrupted) via a `backup_info` param passed in from `cli.py` rather than computed inside `verify_store()`'s pure-function boundary. `SCHEMA_VERSION`/`migrate_record()` added to `cohorts.py` (mode/as_of) and `webapp.py`'s screen and backtest logs (universe field), replacing scattered inline `.setdefault()` defaulting with one migration function per store, consistently applied at every read site that consumes the field; `cohorts._load_all()` now persists a migrated record back to disk instead of silently re-migrating it in memory on every future read (a real gap caught while writing tests, before shipping). New CLI command `backup`; nightly cron documented as `update && verify && backup` plus a manual off-machine sync step. 21 new tests. 354 tests.
 0.16.0 — Market breadth regime fields (ROADMAP §C, §12j, LITERATURE.md §9): `pct_above_200dma`/`pct_at_20d_high` computed from the universe itself (no external data feed) via `cross_section.compute_breadth()` (as-of scalar) and `backtest.compute_breadth_series()` (vectorized, whole-calendar, exact — not stride-approximated, since it's cheap to compute exactly); a new `breadth` DSL condition ("market breadth positive" → pct_above_200dma ≥ 50) wired through screening, evidence, and the backtester at all five `_cross_sectional_context()` call sites. Shipped as a standalone gap-fill, deliberately decoupled from the nse_full-vs-nifty500 preset backtest comparison it was originally paired with — that comparison stays blocked on pre-registered hypotheses (writing the prediction down before running the analysis is the point of pre-registering). 11 new tests, 1 new golden fixture. 334 tests.

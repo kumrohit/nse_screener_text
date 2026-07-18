@@ -50,6 +50,11 @@ Keep it fresh with a nightly job (after 18:30 IST, once NSE close data settles):
 python -m screener.cli update && python -m screener.cli verify && python -m screener.cli backup
 ```
 
+`update` also refreshes the indicator-panel cache (`data/{universe}/indicators.parquet`) it
+writes through to, so every interactive `screen`/`backtest`/`cohort` command afterward only
+ever loads it — never rebuilds from raw prices. `verify` still reads the raw price store
+itself for its own integrity checks, independent of the cache.
+
 `backup` snapshots the irreplaceable evidence — cohort records, screen/allocation/backtest
 logs, watchlist, saved presets — into a timestamped `data/backups/<ts>/` directory (prices and
 the universe list are excluded; `backfill` regenerates those, so they aren't evidence). It
@@ -325,7 +330,7 @@ Unknown keys are flagged and ignored rather than silently doing nothing. The eff
 ## Tests
 
 ```bash
-python -m pytest tests/                    # 383 tests: synthetic series with known answers,
+python -m pytest tests/                    # 395 tests: synthetic series with known answers,
                                            # evidence-layer agreement, web API contract,
                                            # allocation-engine invariants, backtester
                                            # methodology (event dedup, entry convention,
@@ -341,7 +346,10 @@ python -m pytest tests/                    # 383 tests: synthetic series with kn
                                            # schema versioning (migrate-and-persist),
                                            # Link (2003) practitioner screens (stochastic
                                            # hand-check, threshold-cross/persistence edge
-                                           # cases, divergence pivot detection)
+                                           # cases, divergence pivot detection), indicator-
+                                           # panel cache (equivalence, invalidation)
+pytest -m perf tests/perf_bench.py         # performance-regression harness (excluded from
+                                           # the default run above) — run before version tags
 cd web/visual && npm test                  # visual regression: 6 baseline screenshots
                                            # against a live demo-mode server (see below)
 python -m tests.golden_harness             # live parser scoring vs 29 hand-verified queries

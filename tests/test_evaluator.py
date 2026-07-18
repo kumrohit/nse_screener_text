@@ -500,6 +500,12 @@ class TestStaleServerFix:
         uni = pd.DataFrame({"symbol": ["ONLY"], "name": ["Only Co"],
                             "industry": ["Services"]})
         monkeypatch.setattr(config, "PRICE_STORE", store)
+        # ROADMAP Item 20 P1: _load_state now also writes an indicator
+        # cache (config.indicator_store(), derived from live DATA_DIR,
+        # not a patchable attribute like PRICE_STORE) — without this,
+        # the tiny synthetic panel built here would land in the real
+        # project's data/nifty500/indicators.parquet.
+        monkeypatch.setattr(config, "DATA_DIR", tmp_path)
         monkeypatch.setattr(data_ingest, "assert_fresh",
                             lambda prices: prices["date"].max())
         monkeypatch.setattr(universe, "fetch_universe", lambda *a, **k: uni)
@@ -532,6 +538,7 @@ class TestStaleServerFix:
         uni = pd.DataFrame({"symbol": ["ONLY"], "name": ["Only Co"],
                             "industry": ["Services"]})
         monkeypatch.setattr(config, "PRICE_STORE", store)
+        monkeypatch.setattr(config, "DATA_DIR", tmp_path)
         monkeypatch.setattr(data_ingest, "assert_fresh",
                             lambda prices: prices["date"].max())
         monkeypatch.setattr(universe, "fetch_universe", lambda *a, **k: uni)

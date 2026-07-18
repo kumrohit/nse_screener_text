@@ -20,7 +20,6 @@ from .universes import DEFAULT_UNIVERSE
 # ---------------------------------------------------------------- paths
 ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = ROOT / "data"
-INDICATOR_STORE = DATA_DIR / "indicators.parquet"  # wide per-symbol latest snapshot
 # Data layer v2 (ROADMAP Item 3) — runs side-by-side with the yfinance
 # store above; nothing reads from these yet. See TECHNICAL_DESIGN.md §4a.
 BHAVCOPY_STORE = DATA_DIR / "bhavcopy_prices.parquet"
@@ -56,6 +55,15 @@ def cohorts_file(universe_id: str = DEFAULT_UNIVERSE) -> Path:
     stores above (no legacy flat-`data/` layout to migrate here, this
     file never existed before the registry did)."""
     return universe_dir(universe_id) / "cohorts.jsonl"
+
+
+def indicator_store(universe_id: str = DEFAULT_UNIVERSE) -> Path:
+    """ROADMAP Item 20 P1 — one indicator-panel cache per universe, same
+    unconditional per-universe-directory convention as `cohorts_file`
+    (this replaces a flat, wide-snapshot-shaped `INDICATOR_STORE`
+    constant declared back in v0.1 and never implemented — nothing on
+    disk in that old shape to migrate). See `screener/panel_store.py`."""
+    return universe_dir(universe_id) / "indicators.parquet"
 
 
 # Kept as plain attributes (not just the functions above) so existing
