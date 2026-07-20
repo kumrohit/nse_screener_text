@@ -200,8 +200,9 @@ Rohit); 15-B membership (archaeology — Rohit); sidebar; Item 20 P2
 nice-to-have, no longer gating) and P3 (webapp evaluate-first,
 optional). Then TAG v1.0.
 
-**After the tag:** T1 (deadline above) → divergence recall check →
-T2 regime-conditional.
+**After the tag:** T1 (deadline above) → Item 21 pairs discovery
+(first post-cutover build session) → divergence recall check → T2
+regime-conditional.
 
 ---
 
@@ -1521,6 +1522,82 @@ evaluate-first) are not yet started** — P1 alone already removes the
 dominant cost this item exists to fix, so P2/P3 are follow-ups, not
 blockers. The v1.0 gate (Item 18) gains P1 as a hardening prerequisite
 — shipping 1.0 with a 70-second CLI screen would be embarrassing.
+
+## 21. Pairs discovery engine (v0.19) — sector-restricted pairs screening
+
+**Division of labour (the architecture decision):** the screener
+DISCOVERS and MONITORS pairs — formation stats, live z-scores, entry
+signals, evidence trails; **pairstrader** (separate repo) owns the
+strategy: execution, sizing, stops, P&L. Integration = a CSV export
+pairstrader ingests. No pairs P&L backtest here — a light
+convergence-rate diagnostic only (below). This is a SEPARATE engine
+(screener/pairs.py + its own tab), not a contortion of the
+single-symbol DSL: pair conditions don't fit per-symbol evaluation and
+forcing them in would damage both.
+
+NOT in the v1.0 gate — first session after the cutover chain.
+
+### Formation (nightly, cached like the panel store)
+
+- [ ] Candidate set: same-sector pairs (universe industry data — so
+      nifty500 only until nse_full gets sector mapping), both legs
+      pass the liquidity gate, and **short-leg-in-F&O constraint**:
+      ingest NSE's F&O-eligible list (new fetcher, cached like the
+      universe file); a pair is tradeable only if at least one leg has
+      single-stock futures (that leg becomes the designated short —
+      matches pairstrader's structure). Constraint toggleable but ON
+      by default.
+- [ ] Formation window 252 bars. TWO ranking methods, both computed,
+      user picks: (a) **distance** — SSD between normalised cumulative
+      return series (Gatev, Goetzmann & Rouwenhorst 2006 — the
+      academically validated rule; caveat tag: Do & Faff 2010/2012
+      show declining profits and cost sensitivity); (b)
+      **cointegration** — Engle–Granger: OLS hedge ratio, ADF on the
+      residual, p < 0.05 gate (practitioner standard; statsmodels
+      becomes a dependency — pin it in requirements).
+- [ ] Per surviving pair: hedge ratio, ADF p, SSD rank, **half-life of
+      mean reversion** (OU fit on the spread; tradability band 5–40
+      bars, outside it flagged), spread mean/σ over formation, and the
+      **convergence diagnostic**: of historical |z| ≥ 2 excursions in
+      the formation window, the fraction that reverted to |z| ≤ 0.5
+      within 20 bars — a screening-quality stat, NOT a strategy
+      backtest (no P&L, no costs; pairstrader does that).
+- [ ] Formation output cached to data/{universe}/pairs.parquet keyed
+      on the panel-cache mtime (same sidecar pattern as v0.18). Perf
+      gate: nightly formation < 60s for nifty500 sector pairs on the
+      Air; live z refresh < 2s.
+
+### Signal & surfaces
+
+- [ ] Live screen: pairs with |z| ≥ entry threshold (default 2.0,
+      configurable), direction resolved (long undervalued leg / short
+      the F&O leg — if the divergence direction would require
+      shorting the non-F&O leg, the pair is shown but flagged
+      UNTRADEABLE-THIS-SIDE), days-in-signal, z trajectory.
+- [ ] Evidence trail per pair, same ledger style: formation stats,
+      hedge ratio, half-life, convergence rate, current z with the
+      formation mean/σ behind it. Spread sparkline (spread + ±2σ
+      bands), pair detail view with both legs' charts.
+- [ ] Pairs tab in the UI; CLI `pairs form` / `pairs screen`;
+      **export**: `pairs export --format pairstrader` → CSV with the
+      columns pairstrader ingests (agree the schema in that repo
+      first — one line in its README documenting the contract).
+- [ ] Screen-log entries for pair screens (same replay discipline);
+      survivorship note variant: formation on current constituents.
+
+### Evidence & tests (≥14)
+
+- [ ] LITERATURE.md section: GGR 2006, Do & Faff decline + costs,
+      cointegration-vs-distance honestly compared, Indian evidence if
+      citable; method tags on every output.
+- [ ] Engineered cointegrated pair (shared factor + stationary AR(1)
+      spread) must: pass ADF, recover the true hedge ratio ±10%,
+      half-life ±30% of construction, signal at an engineered 2.5σ
+      divergence. Independent random walks must fail the ADF gate at
+      ≈ the nominal rate (seeded, tolerance band). Convergence
+      diagnostic hand-computed on a constructed z path. F&O
+      constraint: pair with no F&O leg excluded; wrong-side divergence
+      flagged. Cache invalidation on panel-store change.
 
 ## 12. Recurring operations (not one-time)
 
