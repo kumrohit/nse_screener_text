@@ -179,25 +179,44 @@ closes.
 
 ---
 
-## SEQUENCING — updated 2026-07-18 (post-v0.18)
+## SEQUENCING — updated 2026-07-20 (cutover clock reset)
 
 **Landed:** v0.18.0 indicator cache (Item 20 P1+P5) — warm screens now
 seconds, not minutes; targets live-verified. v0.17 Link screens with
 the divergence recall follow-up filed in Item 19 (check its backtest
-event counts before amending). 395 tests.
+event counts before amending — still open, blocked once by an
+unrelated local I/O issue, retry). 395 tests.
 
 **Milestone watch:** forward-cohort **5-bar milestones froze 07-17/20**
 — first OOS numbers exist. First scorecard review ~07-25; **T1 evidence
 protocol must be signed before it (7 days).**
 
-**Cutover: clock matured** — Monday 07-20: cross-source verdict →
-config flip, delivery condition + accumulation preset, risk log; seed
-delivery cohorts same day.
+**Cutover: clock was wrong, now corrected.** `bhavcopy-update` is a
+manual command and was run exactly once (2026-07-05) — the "2-week
+clock" in the previous version of this doc counted calendar time while
+the actual side-by-side store sat frozen at 6 days of real data
+(06-25→07-03) for over two weeks. Caught 2026-07-20 by checking the
+store's file mtime directly; **the cutover verdict was deferred**
+rather than decided on stale evidence. `bhavcopy-update` re-run same
+day, catching the store up to 07-17 (16 real trading days now
+overlapping) — now wired into the documented nightly cron (README,
+TECHNICAL_DESIGN §11) so this can't lapse silently again. Early read on
+the fuller window is **reassuring, not alarming**: 382/7,986 bars over
+the 0.5% WARN threshold sounds high, but it's fully explained —
+directly confirmed against NSE's own corporate-actions feed — by real
+dividend ex-dates inside the window (yfinance retroactively adjusts for
+them, bhavcopy/our own pipeline correctly don't, by design). See
+TECHNICAL_DESIGN.md §4a for the full analysis. **The actual go/no-go
+verdict and config flip are still Rohit's call**, once a real
+continuous window has accumulated from today's restart — not decided
+by this analysis alone.
 
-**Remaining to v1.0:** cutover chain; comparison run (hypotheses —
-Rohit); 15-B membership (archaeology — Rohit); sidebar; Item 20 P2
-(parallel rebuild — only the cron pays the build now, so P2 is
-nice-to-have, no longer gating) and P3 (webapp evaluate-first,
+**Remaining to v1.0:** cutover verdict (Rohit, once the restarted
+window matures) → config flip + delivery condition/preset + risk log
+(risk log now written, §4a) + seed delivery cohorts; comparison run
+(hypotheses — Rohit); 15-B membership (archaeology — Rohit); sidebar;
+Item 20 P2 (parallel rebuild — only the cron pays the build now, so P2
+is nice-to-have, no longer gating) and P3 (webapp evaluate-first,
 optional). Then TAG v1.0.
 
 **After the tag:** T1 (deadline above) → Item 21 pairs discovery
@@ -300,10 +319,15 @@ hangs off it.
       measurably slower than a plain screen (both ~0.2s) — well under
       the 5s budget.
 
-## 2. Item 3 — NSE bhavcopy migration (data layer v2) — build done 2026-07-05, clock started
+## 2. Item 3 — NSE bhavcopy migration (data layer v2) — build done 2026-07-05, evidence clock RESET 2026-07-20
 
 Deliberately after Item 2. Run side-by-side with yfinance; cut over only
-on evidence.
+on evidence. **The original "2-week clock" (started 2026-07-05) never
+actually accumulated 2 weeks of evidence** — `bhavcopy-update` is a
+manual command and was run exactly once before the collection gap was
+caught 2026-07-20 (real data sat frozen at 6 days, 06-25→07-03). Do not
+trust a calendar-time claim about this evidence window without checking
+`data/bhavcopy_prices.parquet`'s actual date range directly.
 
 - [x] **`screener/bhavcopy.py`** — daily bhavcopy download (retry,
       weekend/holiday-aware via 404-as-skip), parse to the store schema,
@@ -330,26 +354,46 @@ on evidence.
       found in Item 0's jump-bar investigation almost exactly.
 - [x] **Cross-source consistency check in `verify`** — `verify.
       check_cross_source`, folded into `python -m screener.cli verify`
-      automatically. First real week of side-by-side data (2026-06-25
-      → 2026-07-03): 45/3,000 overlapping bars over 0.5%, all in 11
-      symbols with a *constant* per-symbol gap — the signature of an
-      already-documented past dividend adjustment (§4a), not a new
-      problem. **2-week clock started 2026-07-05** — not code-gated,
-      calendar-gated; revisit for the actual cutover decision after.
+      automatically. First real day of side-by-side data (2026-07-03,
+      only one overlapping date so far): 45/3,000 bars over 0.5%,
+      described as a "constant per-symbol gap" — but with one date per
+      symbol that claim was untestable, not verified. **Corrected
+      2026-07-20** after resuming `bhavcopy-update` (16 real trading
+      days now overlapping, 7,986 bars): 382 over threshold across 39
+      symbols, but the true shape is a smooth decay from 39 symbols on
+      the oldest date to 0 on the most recent — the signature of
+      yfinance's dividend-inclusive `auto_adjust` vs. bhavcopy's raw +
+      splits/bonuses-only pipeline (§4a), **directly confirmed** by
+      cross-referencing `fetch_corporate_actions()` (all 8
+      largest-divergence symbols have a real dividend ex-date inside
+      the window, lining up exactly with each one's decay pattern) —
+      not a new problem, a known convention difference finally measured
+      with enough real data to see its actual shape.
 - [ ] **DSL: `delivery` condition** + vocabulary ("high delivery",
       "delivery spike") + preset ("accumulation: volume spike + delivery
       > 60%") — only after cutover.
 - [ ] **Cutover** — config flag flips primary source; yfinance demoted
-      to fallback; README/runbook updated. Blocked on the 2-week
-      evidence window above.
-- [ ] **Risk log** — NSE format changes are the known recurring hazard;
+      to fallback; README/runbook updated. Blocked on a real
+      continuous evidence window accumulating from the 2026-07-20
+      restart (the reassuring dividend-decay finding above informs the
+      eventual verdict but doesn't substitute for it) — **verdict is
+      Rohit's call**, not to be made unilaterally on this analysis.
+- [x] **Risk log** — NSE format changes are the known recurring hazard;
       keep parser tolerant and fail loud with the file snippet in the
-      error. (The ingestion code already fails loud on fetch errors and
-      logs which day/symbol failed; a dedicated risk-log write-up is
-      still open.)
-- [ ] **Nightly cron** — `bhavcopy-update` is a manual command today;
-      add it alongside `update` in the cron job once side-by-side
-      collection should run unattended.
+      error. Written up in TECHNICAL_DESIGN.md §4a 2026-07-20: existing
+      mitigations (loud-fail on non-404 fetch errors, `None`-not-guessed
+      on unparseable corporate-action subject lines, full audit record
+      of every action including unparsed ones) plus the still-open gap
+      (no dedicated format-*change* alert — today a break would surface
+      as a fetch exception or `verify`'s existing jump-bar smell test,
+      not a purpose-built signal).
+- [x] **Nightly cron** — `bhavcopy-update` is still a manual *command*
+      (no code change needed to run it), but is now documented alongside
+      `update` in the nightly cron line (README, TECHNICAL_DESIGN §11)
+      — closing the exact gap that let evidence collection lapse
+      silently for two weeks once already. Actually adding it to a real
+      crontab is an operational step for whoever runs the nightly job,
+      same as the rest of that line.
 
 ## 3. Screen backtesting — UNPARKED 2026-07-06 → spec in Item 14
 

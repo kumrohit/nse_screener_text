@@ -47,13 +47,16 @@ labelled 11-stock demo universe so you can explore the interface first.
 Keep it fresh with a nightly job (after 18:30 IST, once NSE close data settles):
 
 ```bash
-python -m screener.cli update && python -m screener.cli verify && python -m screener.cli backup
+python -m screener.cli update && python -m screener.cli bhavcopy-update && python -m screener.cli verify && python -m screener.cli backup
 ```
 
 `update` also refreshes the indicator-panel cache (`data/{universe}/indicators.parquet`) it
 writes through to, so every interactive `screen`/`backtest`/`cohort` command afterward only
 ever loads it — never rebuilds from raw prices. `verify` still reads the raw price store
-itself for its own integrity checks, independent of the cache.
+itself for its own integrity checks, independent of the cache. `bhavcopy-update` collects the
+side-by-side NSE bhavcopy evidence used for the eventual data-layer-v2 cutover (see
+[TECHNICAL_DESIGN.md §4a](TECHNICAL_DESIGN.md)) — it's a manual command today, so if you're
+not running it nightly, that evidence collection silently stalls (it did once already).
 
 `backup` snapshots the irreplaceable evidence — cohort records, screen/allocation/backtest
 logs, watchlist, saved presets — into a timestamped `data/backups/<ts>/` directory (prices and
