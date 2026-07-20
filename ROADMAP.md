@@ -179,19 +179,29 @@ closes.
 
 ---
 
-## SEQUENCING — updated 2026-07-12 evening (post-v0.16)
+## SEQUENCING — updated 2026-07-18 (post-v0.18)
 
-**Done this weekend:** Items 16, 17, breadth fields (§C), two-tier
-deletion guard, weekend-proof suite. Forward cohorts aging since 07-11.
+**Landed:** v0.18.0 indicator cache (Item 20 P1+P5) — warm screens now
+seconds, not minutes; targets live-verified. v0.17 Link screens with
+the divergence recall follow-up filed in Item 19 (check its backtest
+event counts before amending). 395 tests.
 
-**Remaining to v1.0:** (1) Rohit: hypotheses doc → comparison run
-session (the other half of Session 2); (2) 2026-07-19 cutover chain;
-(3) 15-B membership (archaeology-gated); (4) sidebar; (5) Item 18
-hardening trio (backup, schema versioning, docs pass). Then TAG v1.0.
+**Milestone watch:** forward-cohort **5-bar milestones froze 07-17/20**
+— first OOS numbers exist. First scorecard review ~07-25; **T1 evidence
+protocol must be signed before it (7 days).**
 
-**After the tag:** Item 18 post-1.0 tracks, T1 (evidence protocol)
-first — retirement/promotion rules must exist before the first
-scorecard review (~2026-07-25), not after.
+**Cutover: clock matured** — Monday 07-20: cross-source verdict →
+config flip, delivery condition + accumulation preset, risk log; seed
+delivery cohorts same day.
+
+**Remaining to v1.0:** cutover chain; comparison run (hypotheses —
+Rohit); 15-B membership (archaeology — Rohit); sidebar; Item 20 P2
+(parallel rebuild — only the cron pays the build now, so P2 is
+nice-to-have, no longer gating) and P3 (webapp evaluate-first,
+optional). Then TAG v1.0.
+
+**After the tag:** T1 (deadline above) → divergence recall check →
+T2 regime-conditional.
 
 ---
 
@@ -1370,6 +1380,19 @@ mismatches against the real 500-symbol store. See TECHNICAL_DESIGN.md
       near_support 3.0. Reversal screen; tagged lowest-confidence
       (divergence has the weakest evidence basis of the five — say so
       in the evidence object).
+
+- [ ] **Divergence recall follow-up (spec flaw found in 07-17 sync
+      review — attribution: the spec, not the implementation).** "Two
+      most recent confirmed pivot lows" compares wiggle-to-wiggle: any
+      minor pivot low between the two swing lows (the pullback inside
+      the bounce creates one on almost any noisy path) displaces the
+      earlier swing, so classic swing-to-swing divergences are
+      systematically missed. Expected symptom: near-zero event counts
+      in the divergence preset's backtest timeline — CHECK THAT FIRST;
+      if confirmed, amend the formula (candidate: most recent pivot
+      low vs the LOWEST prior pivot low in the window, or a prominence
+      filter) as a spec change with the same strictness discipline,
+      and re-run its fixtures. Do not soften ad hoc.
 
 ### Explicitly NOT implemented, with reasons (LITERATURE.md records them)
 
