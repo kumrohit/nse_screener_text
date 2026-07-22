@@ -179,49 +179,35 @@ closes.
 
 ---
 
-## SEQUENCING — updated 2026-07-20 (cutover clock reset)
+## SEQUENCING — updated 2026-07-21 (post cutover-deferral)
 
-**Landed:** v0.18.0 indicator cache (Item 20 P1+P5) — warm screens now
-seconds, not minutes; targets live-verified. v0.17 Link screens with
-the divergence recall follow-up filed in Item 19 (check its backtest
-event counts before amending — still open, blocked once by an
-unrelated local I/O issue, retry). 395 tests.
+**The cutover clock restarted 2026-07-20** after the evidence-collection
+gap was caught (bhavcopy store had 6 real trading days while the doc
+counted calendar weeks). Verdict now eligible **~2026-08-03**, from a
+continuous window with collection in the nightly cron so it cannot
+lapse silently again. **Standing rule from this incident: any future
+"clock" in this doc must name its evidence counter (N trading days of
+X collected), never a calendar date alone.**
 
-**Milestone watch:** forward-cohort **5-bar milestones froze 07-17/20**
-— first OOS numbers exist. First scorecard review ~07-25; **T1 evidence
-protocol must be signed before it (7 days).**
+**PROPOSED GATE AMENDMENT (Rohit to confirm):** move the cutover chain
+OUT of the v1.0 gate. Rationale: the engine is feature-complete; the
+cutover is a data-source migration gated on calendar evidence, not
+engineering — holding the tag ~2 weeks for it conflates the two. v1.0
+would then require: comparison run + 15-B membership + sidebar (P1
+already landed). Delivery condition + accumulation preset land with
+the cutover whenever its window matures, as v1.0.x.
 
-**Cutover: clock was wrong, now corrected.** `bhavcopy-update` is a
-manual command and was run exactly once (2026-07-05) — the "2-week
-clock" in the previous version of this doc counted calendar time while
-the actual side-by-side store sat frozen at 6 days of real data
-(06-25→07-03) for over two weeks. Caught 2026-07-20 by checking the
-store's file mtime directly; **the cutover verdict was deferred**
-rather than decided on stale evidence. `bhavcopy-update` re-run same
-day, catching the store up to 07-17 (16 real trading days now
-overlapping) — now wired into the documented nightly cron (README,
-TECHNICAL_DESIGN §11) so this can't lapse silently again. Early read on
-the fuller window is **reassuring, not alarming**: 382/7,986 bars over
-the 0.5% WARN threshold sounds high, but it's fully explained —
-directly confirmed against NSE's own corporate-actions feed — by real
-dividend ex-dates inside the window (yfinance retroactively adjusts for
-them, bhavcopy/our own pipeline correctly don't, by design). See
-TECHNICAL_DESIGN.md §4a for the full analysis. **The actual go/no-go
-verdict and config flip are still Rohit's call**, once a real
-continuous window has accumulated from today's restart — not decided
-by this analysis alone.
+**This week (acute):** T1 evidence protocol — first scorecard review
+~07-25, **4 days**; the retirement/promotion rules must be signed
+before results are read. Then: hypotheses doc → comparison run
+session; membership archaeology; sidebar.
 
-**Remaining to v1.0:** cutover verdict (Rohit, once the restarted
-window matures) → config flip + delivery condition/preset + risk log
-(risk log now written, §4a) + seed delivery cohorts; comparison run
-(hypotheses — Rohit); 15-B membership (archaeology — Rohit); sidebar;
-Item 20 P2 (parallel rebuild — only the cron pays the build now, so P2
-is nice-to-have, no longer gating) and P3 (webapp evaluate-first,
-optional). Then TAG v1.0.
+**Next build sessions:** comparison run (once hypotheses exist) →
+sidebar → TAG v1.0 (if amendment confirmed) → Item 21 pairs discovery
+→ divergence recall check → T2.
 
-**After the tag:** T1 (deadline above) → Item 21 pairs discovery
-(first post-cutover build session) → divergence recall check → T2
-regime-conditional.
+**Milestones:** 5-bar OOS frozen 07-17/20 (unread until T1 signed —
+hold the line); 20-bar ~08-07; cutover verdict ~08-03.
 
 ---
 
