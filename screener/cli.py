@@ -169,7 +169,7 @@ def cmd_refetch(args) -> None:
 
 def cmd_presets(_args) -> None:
     from . import dsl as _dsl, presets
-    for p in presets.PRESETS:
+    for p in presets.active_presets():
         print(f"{p['id']:<28} [{p['group']}] {p['name']}")
         print(f"{'':28} {_dsl.describe(p['spec'])}\n")
 
@@ -531,6 +531,19 @@ def cmd_scorecard(args) -> None:
                 print(f"  {h}-bar: mean excess net {rh['mean_excess_net']*100:+.2f}%"
                      f"  hit-rate {rh['hit_rate']*100:.0f}%  "
                      f"({rh['n_cohorts']} cohorts, {rh['n_names']} names)")
+    ret = sc["retirement"]
+    if ret["verdict"] == "insufficient_evidence":
+        print(f"\nT1 retirement check: insufficient evidence "
+             f"({ret['n_cohorts']}/{ret['min_cohorts']} cohorts, "
+             f"{ret['days_elapsed'] if ret['days_elapsed'] is not None else 0}"
+             f"/{ret['min_days']} days)")
+    else:
+        print(f"\nT1 retirement check ({ret['horizon']}-bar, "
+             f"{ret['n_cohorts']} cohorts, {ret['days_elapsed']} days): "
+             f"{ret['verdict'].upper()} — mean excess net "
+             f"{ret['mean_excess_net']*100:+.2f}%, hit-rate "
+             f"{ret['hit_rate']*100:.0f}% (floor "
+             f"{ret['hit_rate_floor']*100:.0f}%)")
     print(f"\n{sc['footnote']}")
     print(sc["survivorship_free_note"])
 

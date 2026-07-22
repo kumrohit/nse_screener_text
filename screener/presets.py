@@ -14,11 +14,24 @@ Full citations, magnitude, and India-specific evidence live in
 LITERATURE.md — this module points back to it, not the reverse. A preset
 with no dedicated academic study says so directly rather than inventing
 one; `"sources": []` is a legitimate, honest value.
+
+Every preset also carries a `status` (T1 evidence protocol, see
+EVIDENCE_PROTOCOL.md), defaulted to `STATUS_ACTIVE` at import time for
+any preset that doesn't set one explicitly. `PRESETS` is a Python source
+list, not a runtime store — there is no code path that archives a
+preset automatically; a human reads a "retire" verdict from
+`cohorts.scorecard()`'s `retirement` block during the weekly review and
+edits the preset's dict literal by hand to `status=STATUS_ARCHIVED`
+with a `retirement_record` attached (validated at import time below,
+same fail-fast posture as `dsl.validate()` on the spec).
 """
 from __future__ import annotations
 
 from . import dsl, universes
 from .evaluator import SECTOR_DEPENDENT_TYPES
+
+STATUS_ACTIVE = "active"
+STATUS_ARCHIVED = "archived"
 
 PRESETS: list[dict] = [
     {
@@ -788,12 +801,49 @@ def _preset_universes(spec: dict) -> list[str]:
     return list(ids)
 
 
+# T1 evidence protocol (EVIDENCE_PROTOCOL.md) — required keys on a
+# retirement_record, checked at import time same as everything else
+# below, so a malformed archival record fails immediately rather than
+# surfacing as a confusing None somewhere in the UI.
+_RETIREMENT_RECORD_KEYS = ("date", "verdict", "n_cohorts", "days_elapsed",
+                          "horizon", "mean_excess_net", "hit_rate")
+
+
+def _validate_status(p: dict) -> None:
+    status = p.setdefault("status", STATUS_ACTIVE)
+    if status not in (STATUS_ACTIVE, STATUS_ARCHIVED):
+        raise ValueError(
+            f"{p['id']}: status must be one of "
+            f"{(STATUS_ACTIVE, STATUS_ARCHIVED)}, got {status!r}")
+    if status == STATUS_ARCHIVED:
+        record = p.get("retirement_record")
+        if not isinstance(record, dict):
+            raise ValueError(
+                f"{p['id']}: status=archived requires a "
+                f"retirement_record dict (the T1 protocol's "
+                f"\"record attached\" requirement)")
+        missing = [k for k in _RETIREMENT_RECORD_KEYS if k not in record]
+        if missing:
+            raise ValueError(
+                f"{p['id']}: retirement_record missing keys {missing}")
+
+
 # fail fast: an invalid preset is a bug, not a runtime condition
 _BY_ID = {}
 for _p in PRESETS:
     dsl.validate(_p["spec"])
     _p["universes"] = _preset_universes(_p["spec"])
+    _validate_status(_p)
     _BY_ID[_p["id"]] = _p
+
+
+def active_presets() -> list[dict]:
+    """`PRESETS` minus any archived by the T1 evidence protocol — the
+    view every normal listing surface (CLI `presets`, the webapp
+    dropdown) should use by default. Archived presets stay reachable
+    by id via `get()` so an old saved dashboard selection or a direct
+    link doesn't silently 404 — they're just excluded from discovery."""
+    return [p for p in PRESETS if p.get("status") != STATUS_ARCHIVED]
 
 
 def get(preset_id: str) -> dict:

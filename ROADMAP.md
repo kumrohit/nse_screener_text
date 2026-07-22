@@ -1310,16 +1310,32 @@ evidence, process, and analysis layers on top.
 
 ### Post-1.0 tracks (directional — full spec written when picked up)
 
-- [ ] **T1. Evidence protocol (process, not code — highest value).**
-      EVIDENCE_PROTOCOL.md codifying the lifecycle of a filter:
-      pre-registration required before any backtest; retirement rule
-      decided NOW, before results exist (e.g. after ≥6 forward cohorts
-      AND ≥90 days: OOS mean excess < 0 OR hit rate < 45% → preset
-      moves to an "archived" group with the record attached);
-      promotion rule (what OOS evidence qualifies a filter as an entry
-      trigger for the full momentum system); weekly scorecard review
-      ritual. Small code support: archived preset group + protocol
-      fields on the evidence object.
+- [ ] **T1. Evidence protocol (process, not code — highest value) —
+      DRAFTED 2026-07-21/22, needs Rohit's sign-off, not yet governing
+      anything.** `EVIDENCE_PROTOCOL.md` (new) codifies the lifecycle of
+      a filter — pre-registration (points at the existing
+      `--hypothesis` flag, today a discipline not a code gate);
+      retirement rule **[LOCKED]**, decided before results exist: ≥6
+      forward cohorts AND ≥90 days → retire if 20-bar OOS mean excess <
+      0 OR hit rate < 45% (the 20-bar horizon is this session's own
+      judgment call, not specified in this locked text — flagged in the
+      doc for sign-off); promotion rule **[PROPOSAL, not built]** —
+      mirrors retirement's strictness, deliberately left uncoded
+      pending sign-off since this codebase has no execution layer to
+      promote a filter *into* anyway; weekly scorecard review ritual
+      **[PROPOSAL]**. Small code support shipped: `cohorts.scorecard()`
+      gained a `retirement` block (computed automatically, every call,
+      diagnostic only — nothing archives a preset automatically, a
+      human edits the dict literal by hand per the doc's §2); `presets.py`
+      gained `STATUS_ACTIVE`/`STATUS_ARCHIVED`, `active_presets()`
+      (excludes archived from discovery, `get()` still resolves any
+      preset by id), and import-time validation of a `retirement_record`
+      on any archived preset. Surfaced in the CLI `scorecard` command
+      and the webapp cohorts→scorecard view. 13 new tests, 408 total,
+      green. Live-verified against the real store. See
+      TECHNICAL_DESIGN.md §12n. **Promotion rule and the review ritual
+      itself still need your read — see EVIDENCE_PROTOCOL.md's
+      sign-off checklist at the bottom.**
 - [ ] **T2. Regime-conditional backtests.** Breadth fields exist —
       extend the backtester to split every report by regime at signal
       time (breadth positive/negative, optionally trend of Nifty):

@@ -423,6 +423,105 @@ class TestScorecard:
         assert sc["n_cohorts_total"] == 1
 
 
+def _mixed_universe(n_bars=300, seed=0):
+    """8 strongly-rising symbols (UP*) + 4 mildly-declining ones (DN*) —
+    lets a test steer a cohort's excess-vs-baseline sign deliberately by
+    choosing which group it tracks, since baseline averages across all
+    12 regardless of which subset a cohort follows."""
+    rng = np.random.default_rng(seed)
+    panels = {}
+    for i in range(8):
+        closes = 100 * np.cumprod(
+            1 + np.full(n_bars, 0.003) + rng.normal(0, 0.002, n_bars))
+        panels[f"UP{i}"] = _mk_panel(closes)
+    for i in range(4):
+        closes = 100 * np.cumprod(
+            1 + np.full(n_bars, -0.001) + rng.normal(0, 0.002, n_bars))
+        panels[f"DN{i}"] = _mk_panel(closes)
+    return panels
+
+
+class TestRetirementVerdict:
+    """T1 evidence protocol (EVIDENCE_PROTOCOL.md) — the retirement rule
+    folded into cohorts.scorecard()'s "retirement" key, locked at >=6
+    forward cohorts AND >=90 days: OOS mean excess < 0 OR hit rate < 45%
+    -> retire."""
+
+    def _backdated_cohorts(self, panels, symbol_groups, bars_back,
+                           min_turnover_cr=0):
+        created = str(next(iter(panels.values())).index[-bars_back].date())
+        made = []
+        for syms in symbol_groups:
+            c = cohorts.create_cohort(
+                universe_id="u", spec=SPEC, symbols=syms,
+                weights=cohorts.weights_from_symbols(syms),
+                created_ts=created)
+            cohorts.refresh_cohort(c, panels, min_turnover_cr)
+            made.append(c)
+        cohorts._save_all("u", made)
+        return made
+
+    def test_insufficient_when_too_few_cohorts(self, tmp_data_dir):
+        panels = _mixed_universe(seed=41)
+        groups = [["UP0", "UP1"]] * 4  # only 4 cohorts, need >=6
+        made = self._backdated_cohorts(panels, groups, 70)
+        sc = cohorts.scorecard("u", made[0]["spec_hash"], panels, 0)
+        ret = sc["retirement"]
+        assert ret["eligible"] is False
+        assert ret["verdict"] == "insufficient_evidence"
+        assert ret["n_cohorts"] == 4
+
+    def test_insufficient_when_too_recent(self, tmp_data_dir):
+        panels = _mixed_universe(seed=43)
+        groups = [["UP0", "UP1"]] * 6
+        made = self._backdated_cohorts(panels, groups, 10)  # well under 90 days
+        sc = cohorts.scorecard("u", made[0]["spec_hash"], panels, 0)
+        ret = sc["retirement"]
+        assert ret["eligible"] is False
+        assert ret["verdict"] == "insufficient_evidence"
+        assert ret["n_cohorts"] == 6
+        assert ret["days_elapsed"] < cohorts.MIN_RETIREMENT_DAYS
+
+    def test_retire_verdict_on_systematic_underperformance(
+            self, tmp_data_dir):
+        panels = _mixed_universe(seed=47)
+        # 6 cohorts, all tracking the 4 declining symbols against a
+        # baseline dominated by the 8 rising ones -> reliably negative
+        # excess, not a coin-flip result.
+        groups = [["DN0", "DN1", "DN2", "DN3"]] * 6
+        made = self._backdated_cohorts(panels, groups, 70)
+        sc = cohorts.scorecard("u", made[0]["spec_hash"], panels, 0)
+        ret = sc["retirement"]
+        assert ret["eligible"] is True
+        assert ret["n_cohorts"] == 6
+        assert ret["days_elapsed"] >= cohorts.MIN_RETIREMENT_DAYS
+        assert ret["mean_excess_net"] < 0
+        assert ret["verdict"] == "retire"
+
+    def test_retain_verdict_on_systematic_outperformance(
+            self, tmp_data_dir):
+        panels = _mixed_universe(seed=53)
+        groups = [["UP0", "UP1", "UP2", "UP3"]] * 6
+        made = self._backdated_cohorts(panels, groups, 70)
+        sc = cohorts.scorecard("u", made[0]["spec_hash"], panels, 0)
+        ret = sc["retirement"]
+        assert ret["eligible"] is True
+        assert ret["mean_excess_net"] > 0
+        assert ret["hit_rate"] >= cohorts.RETIREMENT_HIT_RATE_FLOOR
+        assert ret["verdict"] == "retain"
+
+    def test_retirement_never_mutates_cohorts_or_presets(self, tmp_data_dir):
+        """Diagnostic only — computing a verdict must not tombstone,
+        delete, or otherwise touch the underlying cohort records."""
+        panels = _mixed_universe(seed=59)
+        groups = [["DN0", "DN1", "DN2", "DN3"]] * 6
+        made = self._backdated_cohorts(panels, groups, 70)
+        before = cohorts._load_all("u")
+        cohorts.scorecard("u", made[0]["spec_hash"], panels, 0)
+        after = cohorts._load_all("u")
+        assert before == after
+
+
 class TestCurrentReturn:
     def test_current_return_is_live_and_never_frozen(self, tmp_data_dir):
         panels = _universe(n_symbols=3, seed=23)

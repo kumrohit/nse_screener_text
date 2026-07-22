@@ -980,6 +980,68 @@ class TestPresets:
             rr = client.post("/api/screen", json={"spec": i["spec"]})
             assert rr.status_code == 200, i["id"]
 
+    def test_status_defaults_to_active(self):
+        """T1 evidence protocol: a preset with no explicit status is
+        active by default (setdefault at import time), so none of the
+        26+ existing presets needed a hand-edit to gain the field."""
+        from screener import presets
+        for p in presets.PRESETS:
+            assert p["status"] in (presets.STATUS_ACTIVE,
+                                   presets.STATUS_ARCHIVED)
+
+    def test_active_presets_excludes_archived(self):
+        from screener import presets
+        archived_id = next((p["id"] for p in presets.PRESETS
+                            if p.get("status") == presets.STATUS_ARCHIVED),
+                           None)
+        active_ids = {p["id"] for p in presets.active_presets()}
+        assert all(p.get("status") != presets.STATUS_ARCHIVED
+                  for p in presets.active_presets())
+        if archived_id:  # none archived yet in practice, but stay honest
+            assert archived_id not in active_ids
+
+    def test_presets_endpoint_excludes_archived_but_carries_status(self):
+        client = TestClient(app)
+        r = client.get("/api/presets")
+        items = r.json()
+        assert all(i["status"] == "active" for i in items)
+
+    def test_validate_status_rejects_unknown_value(self):
+        from screener import presets
+        with pytest.raises(ValueError, match="status"):
+            presets._validate_status({"id": "x", "status": "retired"})
+
+    def test_validate_status_requires_retirement_record_when_archived(self):
+        from screener import presets
+        with pytest.raises(ValueError, match="retirement_record"):
+            presets._validate_status(
+                {"id": "x", "status": presets.STATUS_ARCHIVED})
+
+    def test_validate_status_rejects_incomplete_retirement_record(self):
+        from screener import presets
+        with pytest.raises(ValueError, match="missing keys"):
+            presets._validate_status({
+                "id": "x", "status": presets.STATUS_ARCHIVED,
+                "retirement_record": {"date": "2026-08-01"}})
+
+    def test_validate_status_accepts_well_formed_archived_preset(self):
+        from screener import presets
+        p = {"id": "x", "status": presets.STATUS_ARCHIVED,
+            "retirement_record": {
+                "date": "2026-08-01", "verdict": "retire", "n_cohorts": 6,
+                "days_elapsed": 95, "horizon": 20, "mean_excess_net": -0.01,
+                "hit_rate": 0.3}}
+        presets._validate_status(p)  # must not raise
+        assert p not in presets.active_presets()  # never touched real PRESETS
+
+    def test_get_still_resolves_archived_presets_by_id(self):
+        """Archived presets stay reachable by id (an old saved dashboard
+        selection shouldn't 404) — only discovery (active_presets(),
+        /api/presets) excludes them."""
+        from screener import presets
+        for p in presets.PRESETS:
+            assert presets.get(p["id"]) is p  # every preset, any status
+
     def test_universes_tag_computed_from_sector_usage(self):
         """ROADMAP Item 15 follow-up: a preset using sector/sector_rank
         is tagged nifty500-only (the only universe with sector data

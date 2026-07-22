@@ -193,9 +193,13 @@ weighted contributors, and an equity curve, evaluable to any date (not
 just the fixed 5/20/60-bar milestones) — and links to a **scorecard**:
 in-sample (backtest) vs. out-of-sample (cohorts) side by side per
 horizon, with the mean suppressed below 20 tracked names rather than
-shown with false confidence. See [TECHNICAL_DESIGN.md
-§12h](TECHNICAL_DESIGN.md)/[§12i](TECHNICAL_DESIGN.md) for the full
-methodology.
+shown with false confidence, plus a **T1 retirement check** (≥6
+cohorts and ≥90 days of OOS evidence, retire if mean excess < 0 or hit
+rate < 45% — decided before any preset's numbers existed, see
+[EVIDENCE_PROTOCOL.md](EVIDENCE_PROTOCOL.md), currently a draft
+awaiting sign-off). See [TECHNICAL_DESIGN.md
+§12h](TECHNICAL_DESIGN.md)/[§12i](TECHNICAL_DESIGN.md)/[§12n](TECHNICAL_DESIGN.md)
+for the full methodology.
 
 With no price store yet, the app boots into a labelled 11-stock demo
 universe so everything above is explorable immediately after clone.
@@ -333,7 +337,7 @@ Unknown keys are flagged and ignored rather than silently doing nothing. The eff
 ## Tests
 
 ```bash
-python -m pytest tests/                    # 395 tests: synthetic series with known answers,
+python -m pytest tests/                    # 408 tests: synthetic series with known answers,
                                            # evidence-layer agreement, web API contract,
                                            # allocation-engine invariants, backtester
                                            # methodology (event dedup, entry convention,
@@ -350,7 +354,8 @@ python -m pytest tests/                    # 395 tests: synthetic series with kn
                                            # Link (2003) practitioner screens (stochastic
                                            # hand-check, threshold-cross/persistence edge
                                            # cases, divergence pivot detection), indicator-
-                                           # panel cache (equivalence, invalidation)
+                                           # panel cache (equivalence, invalidation), evidence
+                                           # protocol retirement rule (see EVIDENCE_PROTOCOL.md)
 pytest -m perf tests/perf_bench.py         # performance-regression harness (excluded from
                                            # the default run above) — run before version tags
 cd web/visual && npm test                  # visual regression: 6 baseline screenshots

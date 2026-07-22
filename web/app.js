@@ -1086,6 +1086,14 @@ function renderCohortScorecard(p){
       <td style="padding:5px 8px">${oosCell}</td>
     </tr>`;
   }).join("");
+  const ret=j.retirement;
+  const retHtml = !ret ? "" : ret.verdict==="insufficient_evidence"
+    ? `<div class="mini" style="margin-top:8px">T1 retirement check: insufficient evidence `+
+      `(${ret.n_cohorts}/${ret.min_cohorts} cohorts, ${ret.days_elapsed ?? 0}/${ret.min_days} days)</div>`
+    : `<div class="mini" style="margin-top:8px">T1 retirement check (${ret.horizon}-bar, `+
+      `${ret.n_cohorts} cohorts, ${ret.days_elapsed} days): <b>${ret.verdict.toUpperCase()}</b> `+
+      `— mean excess net ${btSigned(ret.mean_excess_net)}, hit-rate ${btPct(ret.hit_rate)} `+
+      `(floor ${(ret.hit_rate_floor*100).toFixed(0)}%)</div>`;
   p.innerHTML=`
     <button class="btnsm" onclick="backToCohortsList()" type="button">← back to cohorts</button>
     <div class="eyebrow" style="margin-top:10px">Scorecard — spec ${j.spec_hash}</div>
@@ -1097,7 +1105,8 @@ function renderCohortScorecard(p){
       <tbody>${rows}</tbody>
     </table>
     <div class="capnote" style="margin-top:6px">${j.footnote}</div>
-    <div class="evcaveat" style="margin-top:6px;opacity:.85">${j.survivorship_free_note}</div>`;
+    <div class="evcaveat" style="margin-top:6px;opacity:.85">${j.survivorship_free_note}</div>
+    ${retHtml}`;
 }
 
 async function init(){

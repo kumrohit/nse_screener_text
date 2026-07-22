@@ -227,12 +227,17 @@ def health():
 @app.get("/api/presets")
 def presets_list():
     from . import presets
+    # T1 evidence protocol: archived presets are excluded from
+    # discovery by default (still reachable by id via presets.get(),
+    # so an old saved dashboard selection doesn't 404 — see
+    # presets.active_presets()'s own docstring).
     return [{"id": p["id"], "name": p["name"], "group": p["group"],
              "description": p["description"], "spec": p["spec"],
              "english": dsl.describe(p["spec"]),
              "evidence": p.get("evidence"),
-             "universes": p.get("universes")}
-            for p in presets.PRESETS]
+             "universes": p.get("universes"),
+             "status": p.get("status")}
+            for p in presets.active_presets()]
 
 
 @app.post("/api/parse")

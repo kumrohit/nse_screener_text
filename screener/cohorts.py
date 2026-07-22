@@ -560,6 +560,60 @@ def deleted_forward_summary(universe_id: str, spec_hash: str) -> dict:
             "reasons": [c.get("delete_reason", "") for c in tombs]}
 
 
+# ------------------------------------------------------------ evidence protocol (T1)
+# Retirement rule — locked in EVIDENCE_PROTOCOL.md / ROADMAP's T1 track,
+# decided before results exist rather than fit to whatever a preset's
+# numbers happen to look like once they exist. `RETIREMENT_HORIZON`
+# (which of the 5/20/60-bar milestones the rule reads) is this
+# implementation's own judgment call, not specified in the locked text
+# — 20 bars matches backtest.py's own SENSITIVITY_HORIZON convention as
+# "the" reference horizon elsewhere in this codebase. Flagged in
+# EVIDENCE_PROTOCOL.md as needing sign-off, not silently assumed.
+MIN_RETIREMENT_COHORTS = 6
+MIN_RETIREMENT_DAYS = 90
+RETIREMENT_HORIZON = 20
+RETIREMENT_HIT_RATE_FLOOR = 0.45
+
+
+def _retirement_verdict(forward_cohorts: list[dict], per_horizon: dict,
+                        horizon: int = RETIREMENT_HORIZON) -> dict:
+    """Diagnostic only — never mutates anything. `presets.py` has no
+    runtime store to archive a preset in (it's a Python source list),
+    so this never retires anything itself: a human reads a "retire"
+    verdict during the weekly review and edits the preset's dict
+    literal to `status=STATUS_ARCHIVED` with this record attached,
+    per EVIDENCE_PROTOCOL.md's own "process, not code" framing."""
+    n_cohorts = len(forward_cohorts)
+    entry_dates = [c["entry_date"] for c in forward_cohorts
+                  if c.get("entry_date")]
+    days_elapsed = None
+    if entry_dates:
+        earliest = min(pd.Timestamp(d) for d in entry_dates)
+        days_elapsed = int(
+            (pd.Timestamp.now().normalize() - earliest).days)
+
+    base = {"n_cohorts": n_cohorts, "days_elapsed": days_elapsed,
+           "min_cohorts": MIN_RETIREMENT_COHORTS,
+           "min_days": MIN_RETIREMENT_DAYS, "horizon": horizon,
+           "hit_rate_floor": RETIREMENT_HIT_RATE_FLOOR,
+           "mean_excess_net": None, "hit_rate": None}
+
+    eligible = (n_cohorts >= MIN_RETIREMENT_COHORTS
+               and days_elapsed is not None
+               and days_elapsed >= MIN_RETIREMENT_DAYS)
+    h = per_horizon.get(str(horizon), {})
+    if not eligible or h.get("insufficient", True):
+        return {**base, "eligible": eligible,
+               "verdict": "insufficient_evidence"}
+
+    fails = (h["mean_excess_net"] < 0
+            or h["hit_rate"] < RETIREMENT_HIT_RATE_FLOOR)
+    return {**base, "eligible": True,
+           "verdict": "retire" if fails else "retain",
+           "mean_excess_net": h["mean_excess_net"],
+           "hit_rate": h["hit_rate"]}
+
+
 # ------------------------------------------------------------ scorecard
 def _aggregate_scorecard_horizons(cohorts: list[dict]) -> dict:
     """Per-horizon mean/median/hit-rate on excess net, from whatever
@@ -632,6 +686,7 @@ def scorecard(universe_id: str, spec_hash: str,
         "n_cohorts_total": len(forward_cohorts),
         "deleted_forward": deleted_forward_summary(universe_id, spec_hash),
         "horizons": per_horizon,
+        "retirement": _retirement_verdict(forward_cohorts, per_horizon),
         "replay": {
             "label": "replay (in-sample) — NOT part of the OOS scorecard",
             "n_cohorts": len(replay_cohorts),
